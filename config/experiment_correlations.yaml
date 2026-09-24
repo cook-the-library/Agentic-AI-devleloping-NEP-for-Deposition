@@ -1,0 +1,16 @@
+# Real experimental deposition setup that stage 6 (identify_deposition_setup.py)
+# correlates the simulation against. Fill in what you know; leave null for anything
+# unmeasured -- the workflow will still run, just optimizing toward simulated
+# criteria alone rather than validating against a measured target.
+
+experiment:
+  name: "FILL_ME_IN"                # short label, e.g. "GaN-on-diamond_run3"
+  deposition_technique: "FILL_ME_IN" # e.g. "sputtering", "PVD", "CVD", "MBE"
+  substrate_material: "FILL_ME_IN"
+  deposit_material: "FILL_ME_IN"
+  substrate_temperature_K: null
+  chamber_pressure_Pa: null
+  measured_target_property: "tbc"    # "tbc" or "kappa"
+  measured_value: null                # fill in once you have an experimental number
+  measured_value_uncertainty: null
+  notes: ""

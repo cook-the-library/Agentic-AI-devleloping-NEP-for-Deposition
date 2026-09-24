@@ -1,0 +1,43 @@
+# Thresholds that decide "sufficient potential?" at stage 5, and the parameter
+# ranges swept during deposition optimization at stage 8.
+# Edit the numeric values -- these defaults are commonly-used starting points in
+# NEP/GPUMD active-learning workflows, NOT validated for your specific material system.
+
+evaluation:
+  # NEP vs AIMD accuracy, computed on a held-out test split by evaluate_potential.py
+  energy_rmse_meV_per_atom_max: 1.0
+  force_rmse_meV_per_A_max: 60.0
+  virial_rmse_meV_per_atom_max: 3.0
+
+  # Set to null to skip a criterion (e.g. if TBC isn't relevant for this round)
+  kappa:
+    enabled: true
+    method: "hnemd"                 # "hnemd" or "green_kubo" (GPUMD supports both)
+    target_W_per_mK: null           # experimental/reference value to compare against, if known
+    relative_tolerance: 0.20        # accept if within +/-20% of target, when target is set
+
+  tbc:
+    enabled: true
+    method: "nemd"                  # non-equilibrium MD interface method
+    target_MW_per_m2K: null         # experimental/reference value, if known
+    relative_tolerance: 0.25
+
+  # If a round is inconclusive (some criteria pass, some fail), decide_next_step.py
+  # requires ALL enabled criteria to pass before calling the potential "sufficient".
+  require_all_criteria: true
+
+active_learning:
+  # When insufficient, how the next round of structures is generated
+  structures_per_round: 40
+  bias_toward_high_error: true      # sample more near configurations with largest NEP/AIMD disagreement
+  max_rounds: 5
+
+deposition_sweep:
+  # Parameter grid stage 7/8 explores -- edit ranges to your deposition process
+  temperature_K: [300, 500, 700, 900]
+  incident_energy_eV: [1, 5, 10, 20, 40]
+  incident_angle_deg: [0, 15, 30, 45]
+  flux_atoms_per_ps: [0.5, 1.0, 2.0]
+  optimization_method: "grid"       # "grid" or "bayesian" (bayesian uses scikit-optimize if installed)
+  bayesian_n_calls: 30              # only used if optimization_method == "bayesian"
+  target_property: "tbc"            # "tbc" or "kappa" -- what find_optimal_conditions.py ranks by

@@ -28,9 +28,14 @@ from _common import ConfigError, eprint, load_criteria_config, read_json, round_
 
 
 def check_accuracy(evaluation: dict, criteria: dict) -> list[str]:
-    """Returns a list of human-readable failure reasons (empty if all pass)."""
+    """AIMD energy comparison -- the required, first-checked criterion.
+    Returns a list of human-readable failure reasons (empty if all pass)."""
     acc = evaluation.get("accuracy", {})
     eval_cfg = criteria["evaluation"]
+    if eval_cfg.get("energy_rmse_meV_per_atom_max") is None:
+        raise ConfigError(
+            "config/criteria.yaml evaluation.energy_rmse_meV_per_atom_max must be set -- "
+            "the AIMD energy comparison is the required evaluation criterion.")
     failures = []
 
     checks = [
@@ -53,11 +58,12 @@ def check_accuracy(evaluation: dict, criteria: dict) -> list[str]:
 
 
 def check_physical_criterion(name: str, result: dict, section_cfg: dict) -> tuple[str, str | None]:
-    """Returns (status, reason) where status is 'pass', 'fail', 'skip', or 'blocked'."""
+    """Optional criterion (kappa/TBC). Returns (status, reason) where status is
+    'pass', 'fail', 'skip', or 'blocked'."""
     if not section_cfg.get("enabled"):
         return "skip", None
     status = result.get("status")
-    if status == "disabled":
+    if status in ("disabled", "skipped_aimd_failed"):
         return "skip", None
     if status in ("not_evaluated", "blocked", "needs_manual_review", "pending", "dry_run"):
         return "blocked", result.get("reason") or f"{name} status is '{status}'"
@@ -95,8 +101,11 @@ def main():
         print(f"[decide_next_step] Round {args.round}: BLOCKED (training not complete)")
         return
 
+    # 1. AIMD energy comparison first: if it fails, loop back without waiting
+    # on the optional criteria (more training data is the fix either way).
     accuracy_failures = check_accuracy(evaluation, criteria)
 
+    # 2. Optional criteria (kappa, TBC), only relevant once AIMD passes.
     kappa_status, kappa_reason = check_physical_criterion(
         "kappa", evaluation.get("kappa", {}), criteria["evaluation"]["kappa"])
     tbc_status, tbc_reason = check_physical_criterion(
@@ -112,12 +121,15 @@ def main():
 
     require_all = criteria["evaluation"].get("require_all_criteria", True)
 
-    if "blocked" in (kappa_status, tbc_status):
+    if accuracy_failures:
+        outcome = "insufficient"
+        reason = "AIMD energy comparison failed: " + "; ".join(accuracy_failures)
+    elif "blocked" in (kappa_status, tbc_status):
         outcome = "blocked"
         reason = "; ".join(blocked_reasons)
-    elif accuracy_failures or (physical_failures and require_all):
+    elif physical_failures and require_all:
         outcome = "insufficient"
-        reason = "; ".join(accuracy_failures + physical_failures)
+        reason = "; ".join(physical_failures)
     elif physical_failures and not require_all:
         # Partial pass allowed by config -- still flag it clearly rather than
         # silently treating as fully sufficient.

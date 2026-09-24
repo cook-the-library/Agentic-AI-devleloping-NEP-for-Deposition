@@ -1,8 +1,8 @@
 # Agentic AI: NEP-Driven Deposition Optimization
 
 Closed-loop workflow that generates structures, runs VASP AIMD, trains a GPUMD NEP
-(neuroevolution potential), evaluates it against energy/force RMSE, thermal
-conductivity (kappa) and thermal boundary conductance (TBC) criteria, loops back
+(neuroevolution potential), evaluates it against AIMD energy/force RMSE first, then
+optionally thermal conductivity (kappa) and thermal boundary conductance (TBC), loops back
 for more training data when the potential is insufficient, then uses the trained
 NEP to simulate and optimize deposition conditions on Purdue Anvil or TAMU ACES.
 

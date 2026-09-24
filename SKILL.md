@@ -15,9 +15,9 @@ way the diagram does.
 
 ```
 ┌─────────────────────┐   submit VASP jobs   ┌──────────────┐   train NEP   ┌────────────────────────┐
-│ 1. Generate          │ ───(comp. resource)──▶│ 2. VASP AIMD │──(comp.     ─▶│ 3. Choose evaluation     │
-│    structures for    │                       │    jobs      │  resource)   │    criteria: TBC, kappa, │
-│    deposition        │                       └──────────────┘              │    energy vs AIMD        │
+│ 1. Generate          │ ───(comp. resource)──▶│ 2. VASP AIMD │──(comp.     ─▶│ 3. Evaluation criteria:  │
+│    structures for    │                       │    jobs      │  resource)   │    1) energy vs AIMD     │
+│    deposition        │                       └──────────────┘              │    2) opt.: TBC, kappa   │
 └───────────▲───────────┘                                                    └────────────┬─────────────┘
             │                                                                              │
             │            generate more structures if insufficient                          │ sufficient
@@ -36,7 +36,12 @@ Stages, in order, and the script that implements each:
 1. **Generate structures for deposition** — `scripts/generate_structures.py`
 2. **Submit VASP jobs** (on Anvil or ACES) — `scripts/submit_vasp.py`
 3. **Train NEP** (on Anvil or ACES) — `scripts/vasp_to_nep_dataset.py` then `scripts/submit_nep_training.py`
-4. **Choose evaluation criteria / evaluate** (TBC, kappa, energy vs AIMD) — `scripts/evaluate_potential.py`
+4. **Choose evaluation criteria / evaluate** — `scripts/evaluate_potential.py`
+   1. **Energy vs AIMD** (required, checked first): NEP energy/force/virial RMSE against the
+      VASP AIMD test set. If this fails, the round is `insufficient` and the optional criteria
+      are not run.
+   2. **TBC and kappa** (optional, off by default): enable in `config/criteria.yaml`; they run
+      only after the AIMD comparison passes.
 5. **Decision: sufficient potential?** — `scripts/decide_next_step.py`
    - `insufficient` → go back to stage 1, generating a new round of structures (active-learning style, biased toward the configurations the current NEP got most wrong)
    - `sufficient` → continue to stage 6
@@ -81,7 +86,7 @@ runs/
     vasp/                # stage 2 output (per-structure VASP dirs + job ids)
     nep_dataset/          # stage 3a output (train.xyz / test.xyz)
     nep_model/            # stage 3b output (nep.txt, loss.out, job id)
-    evaluation.json        # stage 4 output (RMSEs, kappa, TBC, verdict inputs)
+    evaluation.json        # stage 4 output (AIMD RMSEs, optional kappa/TBC, verdict inputs)
     decision.json           # stage 5 output ({"sufficient": bool, "reason": ...})
   round_001/               # only created if round_000 was insufficient
     ...

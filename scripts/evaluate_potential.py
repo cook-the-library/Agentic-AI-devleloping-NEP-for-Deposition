@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Stage 4: Evaluate the trained NEP against the criteria in config/criteria.yaml
--- energy/force/virial RMSE vs the AIMD (VASP) test set, plus kappa and TBC if
-enabled and reference structures are configured.
+"""Stage 4: Evaluate the trained NEP against the criteria in config/criteria.yaml,
+in order:
+  1. AIMD energy comparison (required): energy/force/virial RMSE vs the AIMD
+     (VASP) test set.
+  2. kappa and TBC (optional): only if enabled in criteria.yaml, reference
+     structures are configured, AND step 1 passed -- no MD jobs are submitted
+     for a potential that already fails against AIMD.
 
 Energy/force/virial RMSE come directly from GPUMD's own test-set output files
 (energy_test.out, force_test.out, virial_test.out), which NEP writes after
@@ -29,6 +33,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from decide_next_step import check_accuracy
 from _common import (
     ConfigError,
     cluster_config,
@@ -232,14 +237,25 @@ def main():
             write_json(r_dir / "evaluation.json", {"round": args.round, "status": "training_not_complete", "job_state": state})
             sys.exit(1)
 
+    # 1. AIMD energy comparison (required).
     accuracy = compute_accuracy_metrics(model_dir)
-    kappa_result = maybe_run_kappa_or_tbc("kappa", criteria, cluster_cfg, args.cluster, model_dir, r_dir, args.dry_run)
-    tbc_result = maybe_run_kappa_or_tbc("tbc", criteria, cluster_cfg, args.cluster, model_dir, r_dir, args.dry_run)
+    accuracy_failures = check_accuracy({"accuracy": accuracy}, criteria)
+
+    # 2. Optional kappa/TBC, only once the AIMD comparison passes.
+    if accuracy_failures:
+        skipped = {"status": "skipped_aimd_failed",
+                   "reason": "AIMD energy comparison failed; optional criteria not run."}
+        kappa_result = dict(skipped) if criteria["evaluation"]["kappa"].get("enabled") else {"status": "disabled"}
+        tbc_result = dict(skipped) if criteria["evaluation"]["tbc"].get("enabled") else {"status": "disabled"}
+    else:
+        kappa_result = maybe_run_kappa_or_tbc("kappa", criteria, cluster_cfg, args.cluster, model_dir, r_dir, args.dry_run)
+        tbc_result = maybe_run_kappa_or_tbc("tbc", criteria, cluster_cfg, args.cluster, model_dir, r_dir, args.dry_run)
 
     evaluation = {
         "round": args.round,
         "cluster": args.cluster,
         "accuracy": accuracy,
+        "accuracy_failures": accuracy_failures,
         "kappa": kappa_result,
         "tbc": tbc_result,
         # decide_next_step.py reads this back; per_structure_errors is left [] here

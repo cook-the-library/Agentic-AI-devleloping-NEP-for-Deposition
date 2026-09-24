@@ -4,26 +4,30 @@
 # NEP/GPUMD active-learning workflows, NOT validated for your specific material system.
 
 evaluation:
-  # NEP vs AIMD accuracy, computed on a held-out test split by evaluate_potential.py
-  energy_rmse_meV_per_atom_max: 1.0
-  force_rmse_meV_per_A_max: 60.0
-  virial_rmse_meV_per_atom_max: 3.0
+  # 1. AIMD energy comparison (REQUIRED, always checked first).
+  # NEP vs AIMD (VASP) accuracy on the held-out test split, parsed by
+  # evaluate_potential.py. If this fails, the round is "insufficient" and the
+  # optional criteria below are not run, so no compute is spent on them.
+  energy_rmse_meV_per_atom_max: 1.0      # required -- must be set
+  force_rmse_meV_per_A_max: 60.0         # set to null to skip
+  virial_rmse_meV_per_atom_max: 3.0      # set to null to skip
 
-  # Set to null to skip a criterion (e.g. if TBC isn't relevant for this round)
+  # 2. Optional physical criteria. Off by default; set enabled: true to add one.
+  # Only run once the AIMD energy comparison above has passed.
   kappa:
-    enabled: true
+    enabled: false
     method: "hnemd"                 # "hnemd" or "green_kubo" (GPUMD supports both)
     target_W_per_mK: null           # experimental/reference value to compare against, if known
     relative_tolerance: 0.20        # accept if within +/-20% of target, when target is set
 
   tbc:
-    enabled: true
+    enabled: false
     method: "nemd"                  # non-equilibrium MD interface method
     target_MW_per_m2K: null         # experimental/reference value, if known
     relative_tolerance: 0.25
 
-  # If a round is inconclusive (some criteria pass, some fail), decide_next_step.py
-  # requires ALL enabled criteria to pass before calling the potential "sufficient".
+  # When more than one optional criterion is enabled, decide_next_step.py
+  # requires ALL of them to pass before calling the potential "sufficient".
   require_all_criteria: true
 
 active_learning:

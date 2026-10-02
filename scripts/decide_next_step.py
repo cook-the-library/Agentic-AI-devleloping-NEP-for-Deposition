@@ -4,14 +4,13 @@ config/criteria.yaml's thresholds, and decides one of three outcomes:
 
   sufficient        -> proceed to stage 6 (identify_deposition_setup.py)
   insufficient       -> loop back to stage 1 for round+1 (generate_structures.py)
-  blocked             -> stop; a human needs to do something evaluate_potential.py
-                          couldn't (most commonly: finish wiring up kappa/TBC output
-                          parsing for this specific run.in, or fill in a missing
-                          reference structure). Looping back to generate more
-                          training structures would NOT fix a blocked evaluation,
-                          so this is deliberately a separate outcome from
-                          "insufficient" -- agentic_orchestrator.py stops on it
-                          rather than burning another round of VASP+NEP compute.
+  blocked             -> stop; a human needs to step in (NEP training not
+                          complete yet, or active_learning.max_rounds reached).
+                          Looping back to generate more training structures
+                          would NOT fix this, so it is deliberately a separate
+                          outcome from "insufficient" -- agentic_orchestrator.py
+                          stops on it rather than burning another round of
+                          VASP+NEP compute.
 
 Writes round_XXX/decision.json and prints a one-line summary + exits 0 always
 (the decision is the output, not a pass/fail exit code) -- callers should read
@@ -57,31 +56,6 @@ def check_accuracy(evaluation: dict, criteria: dict) -> list[str]:
     return failures
 
 
-def check_physical_criterion(name: str, result: dict, section_cfg: dict) -> tuple[str, str | None]:
-    """Optional criterion (kappa/TBC). Returns (status, reason) where status is
-    'pass', 'fail', 'skip', or 'blocked'."""
-    if not section_cfg.get("enabled"):
-        return "skip", None
-    status = result.get("status")
-    if status in ("disabled", "skipped_aimd_failed"):
-        return "skip", None
-    if status in ("not_evaluated", "blocked", "needs_manual_review", "pending", "dry_run"):
-        return "blocked", result.get("reason") or f"{name} status is '{status}'"
-    value = result.get("value")
-    target = section_cfg.get("target_W_per_mK") or section_cfg.get("target_MW_per_m2K")
-    if value is None:
-        return "blocked", f"{name} result has no parsed 'value' field yet."
-    if target is None:
-        # No experimental target to compare against -- accept whatever was computed,
-        # since there's nothing to fail it against. Deposition optimization stage
-        # will still use the value.
-        return "pass", None
-    tol = section_cfg.get("relative_tolerance", 0.2)
-    if abs(value - target) / abs(target) > tol:
-        return "fail", f"{name}={value} outside +/-{tol * 100:.0f}% of target {target}"
-    return "pass", None
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--round", type=int, required=True)
@@ -101,43 +75,14 @@ def main():
         print(f"[decide_next_step] Round {args.round}: BLOCKED (training not complete)")
         return
 
-    # 1. AIMD energy comparison first: if it fails, loop back without waiting
-    # on the optional criteria (more training data is the fix either way).
     accuracy_failures = check_accuracy(evaluation, criteria)
-
-    # 2. Optional criteria (kappa, TBC), only relevant once AIMD passes.
-    kappa_status, kappa_reason = check_physical_criterion(
-        "kappa", evaluation.get("kappa", {}), criteria["evaluation"]["kappa"])
-    tbc_status, tbc_reason = check_physical_criterion(
-        "tbc", evaluation.get("tbc", {}), criteria["evaluation"]["tbc"])
-
-    blocked_reasons = [r for r in (kappa_reason, tbc_reason) if r and
-                        (kappa_status == "blocked" or tbc_status == "blocked")]
-    physical_failures = []
-    if kappa_status == "fail":
-        physical_failures.append(kappa_reason)
-    if tbc_status == "fail":
-        physical_failures.append(tbc_reason)
-
-    require_all = criteria["evaluation"].get("require_all_criteria", True)
 
     if accuracy_failures:
         outcome = "insufficient"
         reason = "AIMD energy comparison failed: " + "; ".join(accuracy_failures)
-    elif "blocked" in (kappa_status, tbc_status):
-        outcome = "blocked"
-        reason = "; ".join(blocked_reasons)
-    elif physical_failures and require_all:
-        outcome = "insufficient"
-        reason = "; ".join(physical_failures)
-    elif physical_failures and not require_all:
-        # Partial pass allowed by config -- still flag it clearly rather than
-        # silently treating as fully sufficient.
-        outcome = "insufficient"
-        reason = "; ".join(physical_failures) + " (require_all_criteria=false, but at least one physical criterion still failed)"
     else:
         outcome = "sufficient"
-        reason = "All enabled criteria met."
+        reason = "AIMD energy comparison met."
 
     max_rounds = criteria["active_learning"].get("max_rounds", 5)
     if outcome == "insufficient" and args.round + 1 >= max_rounds:
@@ -152,7 +97,6 @@ def main():
         "outcome": outcome,   # "sufficient" | "insufficient" | "blocked"
         "reason": reason,
         "accuracy_failures": accuracy_failures,
-        "physical_failures": physical_failures,
         "next_round": args.round + 1 if outcome == "insufficient" else None,
     }
     write_json(r_dir / "decision.json", decision)

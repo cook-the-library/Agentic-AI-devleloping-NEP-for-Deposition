@@ -1,6 +1,6 @@
 ---
 name: nep-deposition-workflow
-description: Run the closed-loop "agentic AI" materials workflow for NEP-potential-driven deposition optimization — generating candidate structures, submitting VASP jobs, training a GPUMD NEP (neuroevolution potential), evaluating it against AIMD/TBC/kappa criteria, looping back to generate more training structures if the potential is insufficient, then using the trained NEP to simulate and optimize deposition conditions on an HPC cluster (Purdue Anvil or TAMU ACES). Use when the user mentions this workflow, NEP training, VASP+NEP active learning, thermal boundary conductance (TBC), thermal conductivity (kappa) evaluation, deposition simulation/optimization, or Anvil/ACES job submission for this pipeline.
+description: Run the closed-loop "agentic AI" materials workflow for NEP-potential-driven deposition optimization — generating candidate structures, submitting VASP jobs, training a GPUMD NEP (neuroevolution potential), evaluating it against AIMD energy/force/virial accuracy, looping back to generate more training structures if the potential is insufficient, then using the trained NEP to simulate and optimize deposition conditions on an HPC cluster (Purdue Anvil or TAMU ACES). Use when the user mentions this workflow, NEP training, VASP+NEP active learning, deposition simulation/optimization, or Anvil/ACES job submission for this pipeline.
 ---
 
 # NEP-Driven Deposition Optimization — Agentic Workflow
@@ -15,9 +15,9 @@ way the diagram does.
 
 ```
 ┌─────────────────────┐   submit VASP jobs   ┌──────────────┐   train NEP   ┌────────────────────────┐
-│ 1. Generate          │ ───(comp. resource)──▶│ 2. VASP AIMD │──(comp.     ─▶│ 3. Evaluation criteria:  │
-│    structures for    │                       │    jobs      │  resource)   │    1) energy vs AIMD     │
-│    deposition        │                       └──────────────┘              │    2) opt.: TBC, kappa   │
+│ 1. Generate          │ ───(comp. resource)──▶│ 2. VASP AIMD │──(comp.     ─▶│ 3. Evaluation criterion: │
+│    structures for    │                       │    jobs      │  resource)   │    energy vs AIMD        │
+│    deposition        │                       └──────────────┘              │                          │
 └───────────▲───────────┘                                                    └────────────┬─────────────┘
             │                                                                              │
             │            generate more structures if insufficient                          │ sufficient
@@ -36,12 +36,8 @@ Stages, in order, and the script that implements each:
 1. **Generate structures for deposition** — `scripts/generate_structures.py`
 2. **Submit VASP jobs** (on Anvil or ACES) — `scripts/submit_vasp.py`
 3. **Train NEP** (on Anvil or ACES) — `scripts/vasp_to_nep_dataset.py` then `scripts/submit_nep_training.py`
-4. **Choose evaluation criteria / evaluate** — `scripts/evaluate_potential.py`
-   1. **Energy vs AIMD** (required, checked first): NEP energy/force/virial RMSE against the
-      VASP AIMD test set. If this fails, the round is `insufficient` and the optional criteria
-      are not run.
-   2. **TBC and kappa** (optional, off by default): enable in `config/criteria.yaml`; they run
-      only after the AIMD comparison passes.
+4. **Evaluate** — `scripts/evaluate_potential.py`: NEP energy/force/virial RMSE against the
+   VASP AIMD test set. If any threshold fails, the round is `insufficient`.
 5. **Decision: sufficient potential?** — `scripts/decide_next_step.py`
    - `insufficient` → go back to stage 1, generating a new round of structures (active-learning style, biased toward the configurations the current NEP got most wrong)
    - `sufficient` → continue to stage 6
@@ -62,8 +58,8 @@ the first real run, fill in:
 
 1. **`config/clusters.yaml`** — SLURM account, partition/queue, module names, and
    VASP/GPUMD executable paths for Anvil and ACES. See `references/hpc_notes.md`.
-2. **`config/criteria.yaml`** — thresholds for "sufficient potential" (energy/force RMSE
-   vs AIMD, kappa and TBC tolerance vs reference/experiment) and the deposition
+2. **`config/criteria.yaml`** — thresholds for "sufficient potential" (energy/force/virial
+   RMSE vs AIMD) and the deposition
    parameter ranges to explore (temperature, incident energy, angle, flux, substrate).
 3. **`config/experiment_correlations.yaml`** — the real experimental deposition setup
    (technique, substrate, measured target TBC/kappa) that stage 6 correlates against.
@@ -86,7 +82,7 @@ runs/
     vasp/                # stage 2 output (per-structure VASP dirs + job ids)
     nep_dataset/          # stage 3a output (train.xyz / test.xyz)
     nep_model/            # stage 3b output (nep.txt, loss.out, job id)
-    evaluation.json        # stage 4 output (AIMD RMSEs, optional kappa/TBC, verdict inputs)
+    evaluation.json        # stage 4 output (AIMD RMSEs, verdict inputs)
     decision.json           # stage 5 output ({"sufficient": bool, "reason": ...})
   round_001/               # only created if round_000 was insufficient
     ...

@@ -142,8 +142,7 @@ def _minimal_render(text: str, context: dict) -> str:
 
 
 def sbatch_context(cluster_cfg: dict, *, job_name: str, workdir: Path, kind: str) -> dict:
-    """kind: 'vasp' | 'nep' | 'deposition' (GPUMD, used for kappa/TBC evaluation
-    runs) | 'lammps' (used for deposition simulations, via pair_style nep).
+    """kind: 'vasp' | 'nep' | 'deposition' (GPUMD MD runs) | 'lammps' (used for deposition simulations, via pair_style nep).
     Walltime is read from walltime_<kind>, falling back to walltime_deposition
     for 'lammps' since both are production-MD-scale runs."""
     walltime_key = f"walltime_{kind}" if f"walltime_{kind}" in cluster_cfg else "walltime_deposition"

@@ -11,9 +11,9 @@ For every completed condition (job_id.json state == COMPLETED), parses:
     each deposited film (that's a second production MD run per condition, on
     top of the deposition run itself) -- so by default this stage ranks the
     top candidates by the structural/energetic proxies and reports which
-    conditions should be fed through a TBC/kappa follow-up (reusing
-    evaluate_potential.py's maybe_run_kappa_or_tbc logic against
-    final_state.data) to get a true target_property-based ranking, rather
+    conditions should be fed through a TBC/kappa follow-up MD calculation
+    (HNEMD/NEMD against final_state.data) to get a true
+    target_property-based ranking, rather
     than silently substituting the proxy for the real target metric.
 """
 from __future__ import annotations
@@ -122,11 +122,9 @@ def main():
         "note": (
             f"Ranking above is by potential-energy-per-atom as a structural proxy, "
             f"NOT by '{target_property}' directly. To get a true '{target_property}' "
-            f"ranking, run a kappa/TBC follow-up MD calculation (see "
-            f"evaluate_potential.py's maybe_run_kappa_or_tbc, pointed at each "
-            f"top-ranked condition's final_state.data instead of the training-stage "
-            f"reference structure) on the top few candidates below, then re-rank by "
-            f"that value."
+            f"ranking, run a kappa/TBC follow-up MD calculation (HNEMD/NEMD, "
+            f"pointed at each top-ranked condition's final_state.data) on the top "
+            f"few candidates below, then re-rank by that value."
         ),
     }
     write_json(DEPOSITION_DIR / "optimal_conditions.json", output)

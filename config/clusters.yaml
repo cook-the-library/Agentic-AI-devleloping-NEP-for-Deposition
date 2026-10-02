@@ -30,7 +30,7 @@ anvil:
   executables:
     vasp_std: "vasp_std"           # or full path if not on PATH after module load
     nep: "nep"                     # GPUMD's nep training binary
-    gpumd: "gpumd"                 # GPUMD's MD binary (used for kappa/TBC evaluation runs)
+    gpumd: "gpumd"                 # GPUMD's MD binary (deposition.sbatch.template)
     lammps: "lmp"                  # LAMMPS binary with pair_style nep, used for deposition simulation
   scratch_dir: "FILL_ME_IN"        # e.g. /anvil/scratch/x-yourusername
 

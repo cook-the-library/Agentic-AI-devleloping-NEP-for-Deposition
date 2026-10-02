@@ -60,7 +60,8 @@ def projectile(species: dict, name: str | None):
 def build_system(builder: Builder, target: str, proj, cb: dict):
     from ase.constraints import FixAtoms
 
-    slab = builder.interface() if target == "film_on_substrate" else builder.add_slab_vacuum(builder.slab(target))
+    gap = float(np.mean(builder.r0["interface_gap_A"]))
+    slab = builder.interface(gap=gap) if target == "film_on_substrate" else builder.add_slab_vacuum(builder.slab(target))
     top = slab.positions[:, 2].max()
     cell = slab.get_cell().copy()
     cell[2][2] = max(cell[2][2], top + cb["start_height_A"] + 8.0)

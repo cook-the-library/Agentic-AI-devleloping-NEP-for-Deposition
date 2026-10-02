@@ -14,9 +14,16 @@ Rounds 1..N -- MD with the previous round's NEP:
   The round-0 families stay in, weighted toward the buckets (families) with
   the worst test loss in the previous round's Check A.
 
-Every solid structure (bulk, compound, slab, interface, the slab under an
-adsorbate, and the starting cells of the MD) can carry vacancies and
-interstitials, per config/sampling.yaml's point_defects.
+Pristine vs. non-pristine (round 0):
+  pristine      a few defect-free, unstrained, unrattled structures: every
+                crystal (bulk, compound) and surface (slab, interface) at
+                several supercell sizes. Written once, in round 0.
+  non-pristine  everything else. Solid structures (bulk, compound, slab,
+                interface, the slab under an adsorbate, and the MD starting
+                cells) get vacancies (0-15 % of their atoms) and interstitials
+                (0-10 %), drawn per structure. Every non-pristine structure
+                gets small thermal rattling: Maxwell-Boltzmann displacements
+                at a temperature drawn per structure.
 
 No structure has more than HARD_MAX_ATOMS (120) atoms, whatever
 config/sampling.yaml's max_atoms says.
@@ -120,10 +127,24 @@ class Builder:
     def pick(self, seq):
         return seq[int(self.rng.integers(len(seq)))]
 
-    def rattle(self, atoms, lo_hi=None):
-        stdev = self.u(lo_hi or self.r0["rattle_A"])
-        atoms.positions += self.rng.normal(0.0, stdev, size=(len(atoms), 3))
+    def thermal_rattle(self, atoms):
+        """Small thermal rattling. Classically, an atom in a harmonic well of
+        stiffness k at temperature T is displaced following the Maxwell-
+        Boltzmann distribution: each Cartesian component is Gaussian with
+        variance k_B*T/k, so the length of the displacement follows the
+        Maxwell distribution. T is drawn per structure."""
+        from ase.units import kB
+
+        c = self.r0["thermal_rattle"]
+        sigma = math.sqrt(kB * self.u(c["temperature_K"]) / c["force_constant_eV_per_A2"])
+        atoms.positions += self.rng.normal(0.0, sigma, size=(len(atoms), 3))
         return atoms
+
+    def host_limit(self, reserve: int = 0) -> int:
+        """Largest defect-free host that still fits max_atoms after the most
+        interstitials and `reserve` extra atoms (an adsorbate or projectile)."""
+        grow = 1.0 + self.r0["point_defects"]["interstitial_fraction"][1]
+        return int((self.max_atoms - reserve) / grow)
 
     def strain(self, atoms, inplane_only=False):
         m = self.r0["strain_max"]
@@ -135,16 +156,39 @@ class Builder:
         atoms.set_cell(atoms.get_cell() @ (np.eye(3) + eps), scale_atoms=True)
         return atoms
 
-    def supercell(self, atoms, min_atoms=1):
-        """Random repeat (i, j, k) of a periodic cell within max_atoms."""
+    def supercell(self, atoms, min_atoms=1, limit=None):
+        """Random repeat (i, j, k) of a periodic cell within `limit` atoms
+        (default max_atoms)."""
         n = len(atoms)
+        limit = limit or self.max_atoms
         options = [(i, j, k) for i in range(1, 5) for j in range(1, 5) for k in range(1, 5)
-                   if min_atoms <= n * i * j * k <= self.max_atoms]
+                   if min_atoms <= n * i * j * k <= limit]
         if not options:
-            options = [(1, 1, 1)] if n <= self.max_atoms else []
+            options = [(1, 1, 1)] if n <= limit else []
         if not options:
             return None
         return atoms.repeat(self.pick(options))
+
+    def sized_supercells(self, atoms, n_sizes, lateral=False):
+        """Up to n_sizes supercells of different sizes within max_atoms
+        (in-plane repeats only for surfaces), spread from the smallest to the
+        largest; for each size the most isotropic repeat is used."""
+        import itertools
+
+        dims = 2 if lateral else 3
+        best = {}
+        for rep in itertools.product(range(1, 5), repeat=dims):
+            m = int(np.prod(rep))
+            if len(atoms) * m > self.max_atoms:
+                continue
+            lengths = atoms.cell.lengths()[:dims] * np.array(rep)
+            aniso = lengths.max() / lengths.min()
+            if m not in best or aniso < best[m][0] - 1e-9:
+                best[m] = (aniso, tuple(rep) + ((1,) if lateral else ()))
+        sizes = sorted(best)
+        if len(sizes) > n_sizes:
+            sizes = [sizes[round(t * (len(sizes) - 1) / max(n_sizes - 1, 1))] for t in range(n_sizes)]
+        return [atoms.repeat(best[m][1]) for m in sizes]
 
     def isolate(self, atoms):
         atoms.set_pbc(False)
@@ -206,9 +250,8 @@ class Builder:
 
         sub, film = self.slab("substrate"), self.slab("film")
         a_s, a_f = sub.cell[:2, :2], film.cell[:2, :2]
-        # room for interstitials and a gas projectile on top of the interface
-        limit = self.max_atoms - self.r0["point_defects"]["max_per_structure"] \
-            - max((len(g) for g in self.gas_species), default=0)
+        # room for the most interstitials and a gas projectile on top of the interface
+        limit = self.host_limit(reserve=max((len(g) for g in self.gas_species), default=0))
         mats = [np.array(m).reshape(2, 2) for m in itertools.product(range(-3, 4), repeat=4)]
         mats = [m for m in mats if round(np.linalg.det(m)) > 0]
         best = None
@@ -230,13 +273,15 @@ class Builder:
             raise ConfigError(
                 f"Cannot fit the film slab onto the substrate slab ({got}; limit "
                 f"interface_max_strain={self.r0['interface_max_strain']}, {limit} atoms = max_atoms "
-                f"{self.max_atoms} minus room for point defects and the largest gas species). "
+                f"{self.max_atoms} minus room for interstitials and the largest gas species). "
                 f"Raise those in config/sampling.yaml or change the surfaces in config/system.yaml.")
         eprint(f"[generate_structures] interface: substrate {best[2]} x film {best[3].tolist()}, "
                f"lateral strain {best[0]:.1%}, {best[1]} atoms")
         return best
 
-    def interface(self):
+    def interface(self, gap=None):
+        """Film on substrate; the film-substrate gap is drawn from
+        interface_gap_A unless given."""
         from ase.build import make_supercell
 
         _, _, (i1, j1), m = self.interface_match
@@ -246,7 +291,7 @@ class Builder:
         film = make_supercell(self.slab("film"), P, wrap=False)
         frac = film.get_scaled_positions(wrap=False)[:, :2] % 1.0  # wrap in-plane only
         z = film.positions[:, 2] - film.positions[:, 2].min()
-        top = sub.positions[:, 2].max() + self.u(self.r0["interface_gap_A"])
+        top = sub.positions[:, 2].max() + (gap if gap is not None else self.u(self.r0["interface_gap_A"]))
         film.positions = frac[:, :1] * sub.cell[0] + frac[:, 1:2] * sub.cell[1]
         film.positions[:, 2] = z + top
         both = sub + film
@@ -255,65 +300,91 @@ class Builder:
 
     # ---- point defects (vacancies and interstitials) --------------------
     def insert_interstitial(self, atoms, zlim=None):
-        """One extra atom at a random site at least 0.75 x (sum of covalent
-        radii) from every atom; inside the slab (zlim) for surfaces."""
-        if len(atoms) + 1 > self.max_atoms:
-            return None
-        sym = self.pick(self.all_symbols)
-        r_min = 0.75 * (self.rcov(sym) + min(self.rcov(x) for x in set(atoms.get_chemical_symbols())))
-        for _ in range(200):
-            if zlim is None:
-                p = self.rng.uniform(0, 1, size=3) @ atoms.cell
-            else:
-                f = self.rng.uniform(0, 1, size=2)
-                p = f[0] * atoms.cell[0] + f[1] * atoms.cell[1]
-                p[2] = self.u(zlim)
-            trial = atoms.copy()
-            trial.append(sym)
-            trial.positions[-1] = p
-            if trial.get_distances(len(trial) - 1, range(len(atoms)), mic=True).min() > r_min:
-                return trial
-        return None
+        """One extra atom (any element of the system) at a random site at
+        least 0.75 x (sum of covalent radii) from every atom; inside the slab
+        (zlim) for surfaces. None if no such site is found."""
+        from ase.geometry import get_distances
 
-    def add_point_defects(self, atoms, surface=False):
-        """With probability point_defects.fraction, add 1..max_per_structure
-        vacancies/interstitials. Interstitials go inside the slab for
-        surfaces and fall back to a vacancy when there is no room."""
+        sym = self.pick(self.all_symbols)
+        if zlim is None:
+            cands = self.rng.uniform(0, 1, size=(200, 3)) @ atoms.cell.array
+        else:
+            f = self.rng.uniform(0, 1, size=(200, 2))
+            cands = f[:, :1] * atoms.cell[0] + f[:, 1:] * atoms.cell[1]
+            cands[:, 2] = self.rng.uniform(*zlim, size=200)
+        _, d = get_distances(cands, atoms.positions, cell=atoms.cell, pbc=atoms.pbc)
+        r_min = 0.75 * (self.rcov(sym) + np.array([self.rcov(x) for x in atoms.get_chemical_symbols()]))
+        ok = np.flatnonzero((d > r_min).all(axis=1))
+        if not len(ok):
+            return None
+        out = atoms.copy()
+        out.append(sym)
+        out.positions[-1] = cands[ok[0]]
+        return out
+
+    def add_point_defects(self, atoms, surface=False, reserve=0):
+        """Vacancies and interstitials at concentrations drawn per structure
+        from point_defects.vacancy_fraction / interstitial_fraction (counts
+        floored, so the drawn fraction is never exceeded). Interstitials go
+        in first, on the intact lattice, so they don't just refill a vacancy;
+        for surfaces they stay inside the slab. Vacancies are then taken from
+        the host atoms. `reserve` keeps room for atoms added afterwards."""
+        if atoms is None:
+            return None
         pd = self.r0["point_defects"]
-        if atoms is None or self.rng.random() >= pd["fraction"]:
-            return atoms
-        for _ in range(int(self.rng.integers(1, pd["max_per_structure"] + 1))):
-            if self.pick(["vacancy", "interstitial"]) == "interstitial":
-                z = atoms.positions[:, 2]
-                new = self.insert_interstitial(atoms, (z.min(), z.max()) if surface else None)
-                if new is not None:
-                    atoms = new
-                    continue
-            if len(atoms) > 2:
-                del atoms[int(self.rng.integers(len(atoms)))]
+        n = len(atoms)
+        n_vac = max(0, min(math.floor(self.u(pd["vacancy_fraction"]) * n), n - 2))
+        n_int = math.floor(self.u(pd["interstitial_fraction"]) * n)
+        n_int = max(0, min(n_int, self.max_atoms - reserve - (n - n_vac)))
+        zlim = (atoms.positions[:, 2].min(), atoms.positions[:, 2].max()) if surface else None
+        for _ in range(n_int):
+            new = self.insert_interstitial(atoms, zlim)
+            if new is None:
+                break
+            atoms = new
+        if n_vac:
+            del atoms[self.rng.choice(n, size=n_vac, replace=False).tolist()]  # host atoms are 0..n-1
         return atoms
+
+    # ---- pristine (round 0 only) ---------------------------------------
+    def pristine_structures(self) -> dict:
+        """The few pristine structures: every crystal and surface at several
+        supercell sizes, with no defects, strain or rattling."""
+        n = self.r0["pristine"]["supercell_sizes"]
+        out = {"bulk": [], "compound": [], "slab": [], "interface": []}
+        for crystal in [self.film, self.substrate, *self.elements.values()]:
+            out["bulk"] += self.sized_supercells(crystal, n)
+        for crystal in self.compounds:
+            out["compound"] += self.sized_supercells(crystal, n)
+        for which in ("film", "substrate"):
+            out["slab"] += [self.add_slab_vacuum(x) for x in self.sized_supercells(self.slab(which), n, lateral=True)]
+        out["interface"] += self.sized_supercells(self.interface(gap=float(np.mean(self.r0["interface_gap_A"]))),
+                                                  n, lateral=True)
+        return out
 
     # ---- round-0 families ----------------------------------------------
     def build(self, family: str):
-        return getattr(self, f"make_{family}")()
+        """One non-pristine round-0 structure; every one gets thermal rattling."""
+        atoms = getattr(self, f"make_{family}")()
+        return None if atoms is None else self.thermal_rattle(atoms)
 
     def make_bulk(self):
         base = self.pick([self.film, self.substrate, *self.elements.values()])
-        a = self.add_point_defects(self.supercell(base))
-        return a and self.rattle(self.strain(a))
+        a = self.add_point_defects(self.supercell(base, limit=self.host_limit()))
+        return a and self.strain(a)
 
     def make_compound(self):
-        a = self.add_point_defects(self.supercell(self.pick(self.compounds)))
-        return a and self.rattle(self.strain(a))
+        a = self.add_point_defects(self.supercell(self.pick(self.compounds), limit=self.host_limit()))
+        return a and self.strain(a)
 
     def make_slab(self):
         s = self.slab(self.pick(["film", "substrate"]))
-        reps = [(i, j) for i in range(1, 4) for j in range(1, 4) if len(s) * i * j <= self.max_atoms]
+        reps = [(i, j) for i in range(1, 4) for j in range(1, 4) if len(s) * i * j <= self.host_limit()] or [(1, 1)]
         s = self.add_point_defects(self.add_slab_vacuum(s.repeat((*self.pick(reps), 1))), surface=True)
-        return self.rattle(self.strain(s, inplane_only=True))
+        return self.strain(s, inplane_only=True)
 
     def make_interface(self):
-        return self.rattle(self.strain(self.add_point_defects(self.interface(), surface=True), inplane_only=True))
+        return self.strain(self.add_point_defects(self.interface(), surface=True), inplane_only=True)
 
     def _n_body(self, n, scale):
         from ase import Atoms
@@ -337,13 +408,14 @@ class Builder:
         return self._n_body(int(self.pick([2, 3])), self.r0["repulsion_distance_scale"])
 
     def make_gas(self):
-        return self.rattle(self.isolate(self.random_rotate(self.pick(self.gas_species).copy())), (0.0, 0.1))
+        return self.isolate(self.random_rotate(self.pick(self.gas_species).copy()))
 
     def make_adsorbate(self):
-        s = self.add_point_defects(self.add_slab_vacuum(self.slab(self.pick(["film", "substrate"]))), surface=True)
         mol = self.random_rotate(self.pick(self.gas_species).copy())
+        s = self.add_slab_vacuum(self.slab(self.pick(["film", "substrate"])))
         if len(s) + len(mol) > self.max_atoms:
             return None
+        s = self.add_point_defects(s, surface=True, reserve=len(mol))
         frac = self.rng.uniform(0, 1, size=2)
         site = frac[0] * s.cell[0] + frac[1] * s.cell[1]
         mol.positions -= mol.positions.mean(axis=0)
@@ -351,10 +423,11 @@ class Builder:
         mol.positions += [site[0], site[1], s.positions[:, 2].max() + self.u(self.r0["adsorbate_height_A"])]
         both = s + mol
         both.set_cell(s.get_cell())
-        return self.rattle(self.add_slab_vacuum(both), (0.0, 0.08))
+        return self.add_slab_vacuum(both)
 
     def make_defect(self):
-        a = self.supercell(self.pick([self.film, self.substrate, *self.compounds]), min_atoms=8)
+        a = self.supercell(self.pick([self.film, self.substrate, *self.compounds]), min_atoms=8,
+                           limit=self.max_atoms - 1)
         if a is None:
             return None
         kind = self.pick(["vacancy", "substitution", "interstitial"])
@@ -368,7 +441,7 @@ class Builder:
             a = self.insert_interstitial(a)
             if a is None:
                 return None
-        return self.rattle(self.strain(a, inplane_only=False), (0.0, 0.08))
+        return self.strain(a)
 
     # ---- rounds 1..N: MD with the previous NEP -------------------------
     def md_snapshots(self, family: str, calc):
@@ -385,7 +458,8 @@ class Builder:
         from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 
         c = self.cfg["rounds_1_to_N"]["amorphous"]
-        a = self.add_point_defects(self.supercell(self.pick([self.film, self.substrate, *self.compounds]), min_atoms=16))
+        a = self.add_point_defects(self.supercell(self.pick([self.film, self.substrate, *self.compounds]),
+                                                  min_atoms=16, limit=self.host_limit()))
         if a is None:
             return []
         a.calc = calc
@@ -414,11 +488,11 @@ class Builder:
 
         c = self.cfg["rounds_1_to_N"]["collision"]
         target = self.pick(["substrate", "film", "film_on_substrate"])
-        slab = self.interface() if target == "film_on_substrate" else self.add_slab_vacuum(self.slab(target))
-        slab = self.add_point_defects(slab, surface=True)
         proj = self.random_rotate(self.pick(self.gas_species).copy())
+        slab = self.interface() if target == "film_on_substrate" else self.add_slab_vacuum(self.slab(target))
         if len(slab) + len(proj) > self.max_atoms:
             return []
+        slab = self.add_point_defects(slab, surface=True, reserve=len(proj))
         cell = slab.get_cell().copy()
         top = slab.positions[:, 2].max()
         cell[2][2] = max(cell[2][2], top + c["start_height_A"] + 8.0)
@@ -520,18 +594,26 @@ def main():
         plan = {**allocate(n_md, md_w), **allocate(total - n_md, r0_w)}
     eprint(f"[generate_structures] Round {args.round} plan: {plan}")
 
+    pristine = b.pristine_structures() if args.round == 0 else {}
     seen = previous_hashes(args.round)
     out_dir = round_dir(args.round) / "structures"
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest, duplicates = [], 0
     for family, count in plan.items():
+        queue = list(pristine.get(family, []))  # the family's pristine structures come first
         made, attempts = 0, 0
         while made < count:
             attempts += 1
             if attempts > 20 * count + 100:
                 raise RuntimeError(f"Could not generate {count} unique '{family}' structures "
                                    f"(made {made} after {attempts} attempts).")
-            batch = b.md_snapshots(family, calc) if family in MD_FAMILIES else [b.build(family)]
+            is_pristine = bool(queue)
+            if is_pristine:
+                batch = [queue.pop(0)]
+            elif family in MD_FAMILIES:
+                batch = b.md_snapshots(family, calc)
+            else:
+                batch = [b.build(family)]
             for atoms in batch:
                 if atoms is None or made >= count or len(atoms) > b.max_atoms:
                     continue
@@ -543,14 +625,15 @@ def main():
                 sid = f"r{args.round:03d}_{family}_{made:04d}"
                 path = out_dir / f"{sid}.vasp"
                 atoms.write(path, format="vasp", direct=True, sort=True)  # grouped species, so POTCAR order matches
-                manifest.append({"id": sid, "family": family, "path": str(path), "hash": h,
-                                 "natoms": len(atoms)})
+                manifest.append({"id": sid, "family": family, "pristine": is_pristine, "path": str(path),
+                                 "hash": h, "natoms": len(atoms)})
                 made += 1
 
     write_json(round_dir(args.round) / "structures_manifest.json",
                {"round": args.round, "plan": plan, "duplicates_rejected": duplicates, "structures": manifest})
-    print(f"[generate_structures] Round {args.round}: wrote {len(manifest)} unique structures to {out_dir} "
-          f"({duplicates} exact duplicates rejected)")
+    n_pristine = sum(e["pristine"] for e in manifest)
+    print(f"[generate_structures] Round {args.round}: wrote {len(manifest)} unique structures "
+          f"({n_pristine} pristine) to {out_dir} ({duplicates} exact duplicates rejected)")
 
 
 if __name__ == "__main__":

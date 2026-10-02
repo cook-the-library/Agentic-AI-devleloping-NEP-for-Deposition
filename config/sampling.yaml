@@ -18,18 +18,32 @@ round0:
     dimer: 1
     trimer: 1
     adsorbate: 2     # gas molecules, fragments and inert atoms on film/substrate surfaces
-    defect: 1        # a single point defect in bulk: vacancy, substitution or interstitial
+    defect: 1        # a single point defect in bulk: vacancy, substitution (the only source of substitutions) or interstitial
     gas: 1           # isolated gas molecules, fragments and atoms
     compound: 1      # interfacial compounds
     repulsion: 1     # short-range repulsion: dimers/trimers at very short distances
-  strain_max: 0.05               # strained cells: each strain component in [-strain_max, +strain_max]
-  rattle_A: [0.01, 0.15]         # rattled cells: Gaussian displacement stdev range
-  # Vacancies and interstitials in solid structures: bulk, compound, slab,
+  # Pristine: a few defect-free, unstrained, unrattled structures, written in
+  # round 0 only -- every crystal (film, substrate, elements, interfacial
+  # compounds) and every surface (film and substrate slab, interface) at
+  # several supercell sizes. Everything else is non-pristine.
+  pristine:
+    supercell_sizes: 4           # sizes per crystal / surface, spread from the smallest to the largest that fits
+  # Point defects in every non-pristine solid structure: bulk, compound, slab,
   # interface, the slab under an adsorbate, and the MD starting cells
-  # (amorphous, collision targets) in rounds 1..N.
+  # (amorphous, collision targets) in rounds 1..N. Concentrations are drawn
+  # uniformly per structure, as a fraction of its atoms.
   point_defects:
-    fraction: 0.5                # share of solid structures that get point defects (the rest stay pristine)
-    max_per_structure: 2         # 1..max vacancies/interstitials, each chosen at random
+    vacancy_fraction: [0.0, 0.15]
+    interstitial_fraction: [0.0, 0.10]
+  # Small thermal rattling of every non-pristine structure: Maxwell-Boltzmann
+  # displacements of an atom in a harmonic well of stiffness k at temperature
+  # T (each component Gaussian with variance k_B*T/k, so the displacement
+  # length follows the Maxwell distribution). T is drawn per structure; at
+  # k = 5 eV/A^2, 50-500 K gives an rms displacement of 0.03-0.09 A per component.
+  thermal_rattle:
+    temperature_K: [50, 500]
+    force_constant_eV_per_A2: 5.0
+  strain_max: 0.05               # strained cells (non-pristine): each strain component in [-strain_max, +strain_max]
   slab_layers: 4
   interface_gap_A: [1.8, 2.6]    # film-substrate spacing
   interface_max_strain: 0.08     # largest lateral strain allowed to fit the film onto the substrate

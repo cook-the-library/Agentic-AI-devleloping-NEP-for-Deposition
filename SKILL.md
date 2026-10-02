@@ -38,10 +38,16 @@ Additional gas   compounds               structures          NEP fit            
 
 **Round 0** — built from crystal templates, no NEP yet: **bulk, slab, interface, dimer,
 trimer, adsorbate**. Also sampled: strained and rattled cells, point defects,
-gas molecules and fragments, interfacial compounds, short-range repulsion. Solid
-structures (bulk, compound, slab, interface, the slab under an adsorbate, and the MD
-starting cells in later rounds) carry vacancies and interstitials
-(`round0.point_defects`).
+gas molecules and fragments, interfacial compounds, short-range repulsion.
+
+- **Pristine** (round 0 only, a few): every crystal and surface at several supercell
+  sizes (`round0.pristine.supercell_sizes`), with no defects, strain or rattling.
+- **Non-pristine** (everything else): solid structures (bulk, compound, slab,
+  interface, the slab under an adsorbate, and the MD starting cells in later rounds)
+  get 0–15 % vacancies and 0–10 % interstitials, drawn per structure
+  (`round0.point_defects`). Every non-pristine structure gets small thermal rattling:
+  Maxwell-Boltzmann displacements at a temperature drawn per structure
+  (`round0.thermal_rattle`).
 
 **Rounds 1 … N** — MD with the previous NEP: **amorphous** (melt-quench) and
 **collision** (gas molecules, fragments and inert atoms hitting the substrate, the film

@@ -1,28 +1,29 @@
-# Thresholds that decide "sufficient potential?" at stage 5, and the parameter
-# ranges swept during deposition optimization at stage 8.
-# Edit the numeric values -- these defaults are commonly-used starting points in
-# NEP/GPUMD active-learning workflows, NOT validated for your specific material system.
+# Step 3: checks after every training round. ALL checks must pass for the
+# round's NEP to become the final NEP; otherwise the round is repeated with
+# more structures where the loss is worst.
 
-evaluation:
-  # AIMD energy comparison: NEP vs AIMD (VASP) accuracy on the held-out test
-  # split, parsed by evaluate_potential.py. If any threshold fails, the round
-  # is "insufficient" and the loop generates more structures.
-  energy_rmse_meV_per_atom_max: 1.0      # required -- must be set
-  force_rmse_meV_per_A_max: 60.0         # set to null to skip
-  virial_rmse_meV_per_atom_max: 3.0      # set to null to skip
+check_a:
+  # Held-out test loss (test.xyz, never trained on).
+  energy_rmse_meV_per_atom_max: 10
+  force_rmse_meV_per_A_max: 250
+  # Stress: compared against the virial RMSE in meV/atom (the unit NEP reports
+  # its stress loss in). Only structures in config/dft.yaml's virial_families
+  # carry stress.
+  stress_rmse_meV_per_atom_max: 250
 
-active_learning:
-  # When insufficient, how the next round of structures is generated
-  structures_per_round: 40
-  bias_toward_high_error: true      # sample more near configurations with largest NEP/AIMD disagreement
-  max_rounds: 5
+check_b:
+  # AIMD vs NEP energy trend while gas hits a substrate, a film, and a film on
+  # substrate. The AIMD reference runs once (setup_check_b.py); every round
+  # the NEP is evaluated on the same AIMD frames and the two E(t) curves are
+  # compared after shifting both to start at zero.
+  targets: [substrate, film, film_on_substrate]
+  projectile: null                  # gas species name; null = first gas molecule (else first inert atom)
+  impact_energy_eV: 10              # within the 0-50 eV collision range
+  steps: 300
+  timestep_fs: 0.5
+  start_height_A: 4.0
+  fixed_bottom_A: 2.0
+  energy_trend_rmse_meV_per_atom_max: 10
 
-deposition_sweep:
-  # Parameter grid stage 7/8 explores -- edit ranges to your deposition process
-  temperature_K: [300, 500, 700, 900]
-  incident_energy_eV: [1, 5, 10, 20, 40]
-  incident_angle_deg: [0, 15, 30, 45]
-  flux_atoms_per_ps: [0.5, 1.0, 2.0]
-  optimization_method: "grid"       # "grid" or "bayesian" (bayesian uses scikit-optimize if installed)
-  bayesian_n_calls: 30              # only used if optimization_method == "bayesian"
-  target_property: "tbc"            # "tbc" or "kappa" -- what find_optimal_conditions.py ranks by
+rounds:
+  max_round: 4                      # rounds r = 0 .. N with N = 4

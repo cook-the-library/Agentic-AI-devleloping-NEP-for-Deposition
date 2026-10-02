@@ -2,4 +2,3 @@ __pycache__/
 *.pyc
 # Workflow outputs (written by the scripts next to scripts/)
 runs/
-deposition/

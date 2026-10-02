@@ -9,13 +9,20 @@
 #SBATCH --error={{workdir}}/slurm-%j.err
 {% if qos %}#SBATCH --qos={{qos}}{% endif %}
 
-set -euo pipefail
-cd "{{workdir}}"
+set -uo pipefail
 
 {% for line in modules %}{{line}}
 {% endfor %}
 
-# INCAR/POSCAR/POTCAR/KPOINTS are expected to already be staged in {{workdir}}
-# by submit_vasp.py before this script is submitted.
-srun --ntasks={{ntasks}} {{vasp_exe}} > vasp.out 2> vasp.err
-echo "VASP_DONE" >> vasp.out
+# Each directory already holds INCAR/POSCAR/POTCAR, staged by submit_vasp.py
+# (or setup_check_b.py). Structures run back to back; one failure doesn't stop
+# the rest, and finished ones are skipped if the job is resubmitted.
+{% for d in dirs %}cd "{{d}}"
+if ! grep -q VASP_DONE vasp.out 2>/dev/null; then
+  if srun --ntasks={{ntasks}} {{vasp_exe}} > vasp.out 2> vasp.err; then
+    echo "VASP_DONE" >> vasp.out
+  else
+    echo "VASP_FAILED" >> vasp.out
+  fi
+fi
+{% endfor %}

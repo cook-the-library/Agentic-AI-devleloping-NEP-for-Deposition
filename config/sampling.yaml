@@ -1,0 +1,56 @@
+# Step 1: how each round's structures are generated (generate_structures.py).
+# Defaults are starting points, NOT validated for your material system.
+
+structures_per_round: 1000       # unique structures per round (after the exact-duplicate check)
+max_atoms: 128                   # per structure, keeps DFT labelling affordable
+isolated_vacuum_A: 6.0           # vacuum on each side of gas / dimer / trimer / cluster boxes
+slab_vacuum_A: 12.0              # vacuum above slab, interface and adsorbate cells
+seed: 0
+
+# Round 0: built from the crystal templates in runs/species.json (no NEP yet).
+# Relative share of each family; families with nothing to build from (e.g.
+# compound with no interfacial compounds) are dropped and the rest renormalised.
+round0:
+  weights:
+    bulk: 3          # film, substrate and elemental crystals
+    slab: 2          # film and substrate surfaces
+    interface: 2     # film on substrate
+    dimer: 1
+    trimer: 1
+    cluster: 1
+    adsorbate: 2     # gas molecules, fragments and inert atoms on film/substrate surfaces
+    defect: 1        # point defects: vacancy, substitution, interstitial
+    gas: 1           # isolated gas molecules, fragments and atoms
+    compound: 1      # interfacial compounds
+    repulsion: 1     # short-range repulsion: dimers/trimers at very short distances
+  strain_max: 0.05               # strained cells: each strain component in [-strain_max, +strain_max]
+  rattle_A: [0.01, 0.15]         # rattled cells: Gaussian displacement stdev range
+  slab_layers: 4
+  interface_gap_A: [1.8, 2.6]    # film-substrate spacing
+  interface_max_strain: 0.08     # largest lateral strain allowed to fit the film onto the substrate
+  cluster_atoms: [4, 13]
+  dimer_distance_scale: [0.8, 2.5]       # x (sum of covalent radii)
+  repulsion_distance_scale: [0.35, 0.8]  # x (sum of covalent radii)
+  adsorbate_height_A: [1.0, 3.0]
+
+# Rounds 1..N: MD with the previous round's NEP, plus the round-0 families
+# again, weighted toward the buckets with the worst test loss in the previous round.
+rounds_1_to_N:
+  md_fraction: 0.5               # share of the round that comes from MD (amorphous + collision)
+  md_weights:
+    amorphous: 1
+    collision: 1
+  snapshots_per_run: 5           # snapshots kept from each MD run
+  amorphous:
+    melt_temperature_K: [2000, 4000]
+    quench_to_K: 300
+    steps: 2000                  # half at the melt temperature, half quenching
+    timestep_fs: 1.0
+  collision:
+    energy_eV: [0, 50]           # impact (kinetic) energy of the projectile
+    max_polar_angle_deg: 60
+    start_height_A: 5.0          # projectile start above the top surface atom
+    surface_temperature_K: 300
+    fixed_bottom_A: 2.0          # atoms this close to the slab bottom are held fixed
+    steps: 1000
+    timestep_fs: 0.25

@@ -1,13 +1,15 @@
 """Shared helpers for the nep-deposition-workflow skill scripts.
 
-Kept dependency-light on purpose: pyyaml + jinja2 + numpy are the only hard
-requirements (see ../requirements.txt). ase/pymatgen are used where available
-for structure handling but every script degrades to a clear error message
-telling the user what to install, rather than silently no-op'ing.
+pyyaml + numpy are the only hard requirements for the helpers themselves;
+ase (structures) and calorine (running a trained NEP on CPU) are imported
+where needed, and every script stops with a clear message telling the user
+what to install rather than silently no-op'ing.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -16,10 +18,13 @@ from pathlib import Path
 import yaml
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_DIR = SKILL_ROOT / "config"
+# NEP_CONFIG_DIR / NEP_RUNS_DIR let one checkout serve several material systems.
+CONFIG_DIR = Path(os.environ.get("NEP_CONFIG_DIR", SKILL_ROOT / "config"))
 TEMPLATES_DIR = SKILL_ROOT / "templates"
-RUNS_DIR = SKILL_ROOT / "runs"
-DEPOSITION_DIR = SKILL_ROOT / "deposition"
+RUNS_DIR = Path(os.environ.get("NEP_RUNS_DIR", SKILL_ROOT / "runs"))
+SPECIES_PATH = RUNS_DIR / "species.json"
+FINAL_NEP_DIR = RUNS_DIR / "final_nep"
+CHECK_B_DIR = RUNS_DIR / "check_b"
 
 
 class ConfigError(RuntimeError):
@@ -40,8 +45,12 @@ def load_criteria_config() -> dict:
     return load_yaml(CONFIG_DIR / "criteria.yaml")
 
 
-def load_experiment_config() -> dict:
-    return load_yaml(CONFIG_DIR / "experiment_correlations.yaml")
+def load_system_config() -> dict:
+    return load_yaml(CONFIG_DIR / "system.yaml")
+
+
+def load_sampling_config() -> dict:
+    return load_yaml(CONFIG_DIR / "sampling.yaml")
 
 
 def _find_unfilled(obj, path=""):
@@ -79,6 +88,71 @@ def cluster_config(cluster: str) -> dict:
         raise ValueError(f"Unknown cluster '{cluster}', expected 'anvil' or 'aces'")
     all_cfg = load_clusters_config()
     return all_cfg[cluster]
+
+
+def require_ase():
+    try:
+        import ase  # noqa: F401
+    except ImportError as e:
+        raise ConfigError("ASE is required (`pip install ase`).") from e
+
+
+def nep_calculator(nep_txt: Path):
+    """ASE calculator for a trained NEP, run on CPU through calorine. Used for
+    the MD sampling in rounds 1..N and for Check A / Check B."""
+    try:
+        from calorine.calculators import CPUNEP
+    except ImportError as e:
+        raise ConfigError(
+            "calorine is required to run a trained NEP from Python (`pip install calorine`)."
+        ) from e
+    if not Path(nep_txt).exists():
+        raise ConfigError(f"{nep_txt} not found -- has NEP training finished?")
+    return CPUNEP(str(nep_txt))
+
+
+def read_template(path_str: str, context: str):
+    """Read a crystal template (CIF/POSCAR/extxyz) given relative to the repo root."""
+    from ase.io import read
+
+    if not path_str or "FILL_ME_IN" in str(path_str):
+        raise ConfigError(f"{context}: structure_file is not set in config/system.yaml.")
+    path = Path(path_str)
+    if not path.is_absolute():
+        path = SKILL_ROOT / path
+    if not path.exists():
+        raise ConfigError(f"{context}: structure file {path} does not exist.")
+    return read(path)
+
+
+def atoms_to_dict(atoms) -> dict:
+    return {
+        "symbols": atoms.get_chemical_symbols(),
+        "positions": atoms.get_positions().round(6).tolist(),
+        "cell": atoms.get_cell().round(6).tolist(),
+        "pbc": [bool(x) for x in atoms.get_pbc()],
+    }
+
+
+def dict_to_atoms(d: dict):
+    from ase import Atoms
+
+    return Atoms(symbols=d["symbols"], positions=d["positions"], cell=d["cell"], pbc=d["pbc"])
+
+
+def structure_hash(atoms, decimals: int = 4) -> str:
+    """Hash for the exact-duplicate check: identical species, cell and
+    (wrapped) positions to `decimals` Angstrom, independent of atom order."""
+    import numpy as np
+
+    a = atoms.copy()
+    if a.get_pbc().any() and a.get_cell().rank == 3:
+        a.wrap()
+    pos = np.round(a.get_positions(), decimals) + 0.0  # +0.0 turns -0.0 into 0.0
+    rows = sorted(zip(a.get_atomic_numbers().tolist(), map(tuple, pos.tolist())))
+    cell = (np.round(a.get_cell().array, decimals) + 0.0).tolist()
+    payload = json.dumps([rows, cell, a.get_pbc().tolist()])
+    return hashlib.sha1(payload.encode()).hexdigest()
 
 
 def round_dir(round_num: int, create: bool = True) -> Path:
@@ -142,27 +216,23 @@ def _minimal_render(text: str, context: dict) -> str:
 
 
 def sbatch_context(cluster_cfg: dict, *, job_name: str, workdir: Path, kind: str) -> dict:
-    """kind: 'vasp' | 'nep' | 'deposition' (GPUMD MD runs) | 'lammps' (used for deposition simulations, via pair_style nep).
-    Walltime is read from walltime_<kind>, falling back to walltime_deposition
-    for 'lammps' since both are production-MD-scale runs."""
-    walltime_key = f"walltime_{kind}" if f"walltime_{kind}" in cluster_cfg else "walltime_deposition"
-    walltime = cluster_cfg[walltime_key]
+    """kind: 'vasp' (DFT labels and Check B AIMD) | 'nep' (training) |
+    'python' (Step 1 MD sampling with the previous NEP, on CPU)."""
+    walltime = cluster_cfg[f"walltime_{kind}"]
     if kind == "vasp":
         partition = cluster_cfg["partition_cpu"]
         nodes = cluster_cfg["nodes_vasp"]
         ntasks = cluster_cfg["ntasks_vasp"]
-        modules_key = "vasp"
-    elif kind == "nep" or kind == "deposition":
+    elif kind == "nep":
         partition = cluster_cfg["partition_gpu"]
         nodes = 1
         ntasks = 1
-        modules_key = "nep"
-    else:  # lammps
-        partition = cluster_cfg["partition_gpu"]
+    else:  # python
+        partition = cluster_cfg["partition_cpu"]
         nodes = 1
-        ntasks = 1
-        modules_key = "lammps"
+        ntasks = cluster_cfg.get("ntasks_python", 1)
 
+    common = load_clusters_config().get("common", {})
     return {
         "job_name": job_name,
         "account": cluster_cfg["account"],
@@ -172,11 +242,11 @@ def sbatch_context(cluster_cfg: dict, *, job_name: str, workdir: Path, kind: str
         "walltime": walltime,
         "workdir": str(workdir),
         "qos": cluster_cfg.get("qos"),
-        "modules": cluster_cfg["modules"].get(modules_key, []),
+        "modules": cluster_cfg["modules"].get(kind, []),
         "vasp_exe": cluster_cfg.get("executables", {}).get("vasp_std", "vasp_std"),
         "nep_exe": cluster_cfg.get("executables", {}).get("nep", "nep"),
-        "gpumd_exe": cluster_cfg.get("executables", {}).get("gpumd", "gpumd"),
-        "lammps_exe": cluster_cfg.get("executables", {}).get("lammps", "lmp"),
+        "conda_env": common.get("conda_env"),
+        "repo_root": str(SKILL_ROOT),
     }
 
 

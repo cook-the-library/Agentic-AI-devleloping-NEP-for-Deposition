@@ -1,0 +1,31 @@
+# Step 2: DFT labels (VASP single points) for every structure, and the Check B
+# AIMD reference runs. Defaults are common starting points, NOT converged for
+# your system -- check ENCUT / KSPACING convergence before a real run.
+
+incar:
+  PREC: Accurate
+  ENCUT: 520
+  EDIFF: 1.0e-6
+  ISMEAR: 0
+  SIGMA: 0.05
+  LREAL: Auto
+  ISYM: 0               # off so rattled / off-equilibrium structures aren't symmetrised
+  LWAVE: false
+  LCHARG: false
+  KSPACING: 0.25        # 1/Angstrom; replaces a KPOINTS file
+  KGAMMA: true
+
+# Families in vacuum boxes: Gamma point only, spin polarised (radicals, atoms).
+isolated_families: [dimer, trimer, cluster, gas, repulsion]
+isolated_kspacing: 10.0
+
+# Spin polarised families (fragments and radicals on surfaces). Add more if
+# your film or substrate is magnetic.
+spin_polarized_families: [dimer, trimer, cluster, gas, repulsion, adsorbate, collision]
+
+# Families whose stress is used for training (periodic in all three
+# directions). Slabs and vacuum boxes keep energy and forces only.
+virial_families: [bulk, compound, defect, amorphous]
+
+structures_per_job: 25   # structures run back to back in one SLURM job (1000 jobs per round would swamp the queue)
+test_fraction: 0.1       # held-out test split for Check A, fixed per structure across rounds

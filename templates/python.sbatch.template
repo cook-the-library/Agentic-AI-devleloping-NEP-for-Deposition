@@ -2,19 +2,19 @@
 #SBATCH --job-name={{job_name}}
 #SBATCH --account={{account}}
 #SBATCH --partition={{partition}}
-#SBATCH --gres=gpu:1
+#SBATCH --nodes={{nodes}}
+#SBATCH --ntasks={{ntasks}}
 #SBATCH --time={{walltime}}
 #SBATCH --output={{workdir}}/slurm-%j.out
 #SBATCH --error={{workdir}}/slurm-%j.err
 {% if qos %}#SBATCH --qos={{qos}}{% endif %}
 
 set -euo pipefail
-cd "{{workdir}}"
+cd "{{repo_root}}"
 
 {% for line in modules %}{{line}}
 {% endfor %}
+{% if conda_env %}eval "$(conda shell.bash hook)" && conda activate {{conda_env}}{% endif %}
 
-# run.in, model.xyz, and nep.txt (trained potential) are expected to already be
-# staged in {{workdir}} by submit_deposition_optimization.py.
-{{gpumd_exe}} > gpumd_run.log 2>&1
-echo "DEPOSITION_RUN_DONE" >> gpumd_run.log
+# Step 1 for rounds 1..N: MD with the previous NEP (calorine, CPU).
+python {{command}}

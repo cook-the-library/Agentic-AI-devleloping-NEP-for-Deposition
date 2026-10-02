@@ -1,0 +1,34 @@
+# INPUT: what is deposited (film), onto what (substrate), and in which gas.
+# Step 0 (resolve_species.py) reads this once and adds the gas and solid
+# species the training data must cover (gas fragments, inert gas, elements,
+# interfacial compounds). Paths are relative to the repository root.
+
+film:
+  formula: "FILL_ME_IN"            # e.g. "GaN"
+  structure_file: "FILL_ME_IN"     # crystal template (CIF/POSCAR/extxyz), e.g. "structures/GaN.cif"
+  surface: [0, 0, 1]               # Miller index of the growth surface
+
+substrate:
+  formula: "FILL_ME_IN"            # e.g. "Si"
+  structure_file: "FILL_ME_IN"     # crystal template, e.g. "structures/Si.cif"
+  surface: [0, 0, 1]
+
+gas:
+  # Additional (reactive) gas. Each entry is either a molecule name that
+  # ase.build.molecule knows (e.g. "NH3", "N2", "H2O", "CH4", "SiH4") or
+  # {name: ..., structure_file: ...} for anything else. Use [] for none.
+  molecules: ["FILL_ME_IN"]
+  # Inert gas added in Step 0 (e.g. ["Ar"] for sputtering). Use [] for none.
+  inert: []
+
+# Elemental crystals are added in Step 0 for every non-gas element. ASE builds
+# simple lattices (fcc/bcc/hcp/diamond/sc) itself; give a template for any
+# other element (e.g. Ga, which is orthorhombic). Example:
+#   Ga: "structures/Ga.cif"
+element_structures: {}
+
+# Interfacial compounds added in Step 0. Step 0 lists every film/substrate
+# element pair; give a crystal template for each compound that can form at the
+# interface (it cannot predict which ones do). Example:
+#   - {formula: "Si3N4", structure_file: "structures/Si3N4.cif"}
+interfacial_compounds: []

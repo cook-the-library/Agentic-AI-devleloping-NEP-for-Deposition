@@ -1,59 +1,25 @@
 #!/usr/bin/env python3
-"""Stage 5: The loop's decision node. Reads round_XXX/evaluation.json and
-config/criteria.yaml's thresholds, and decides one of three outcomes:
+"""Step 3 decision: read runs/round_XXX/evaluation.json and decide.
 
-  sufficient        -> proceed to stage 6 (identify_deposition_setup.py)
-  insufficient       -> loop back to stage 1 for round+1 (generate_structures.py)
-  blocked             -> stop; a human needs to step in (NEP training not
-                          complete yet, or active_learning.max_rounds reached).
-                          Looping back to generate more training structures
-                          would NOT fix this, so it is deliberately a separate
-                          outcome from "insufficient" -- agentic_orchestrator.py
-                          stops on it rather than burning another round of
-                          VASP+NEP compute.
+  sufficient    Check A and Check B both pass -> copy the round's nep.txt to
+                runs/final_nep/ (the final NEP, ready for deposition MD)
+  insufficient  any check fails -> repeat: Step 1 generates round r+1,
+                weighted toward the worst-loss buckets
+  blocked       a human must step in: training or the Check B AIMD hasn't
+                finished, or the failing round is already max_round (N = 4)
 
-Writes round_XXX/decision.json and prints a one-line summary + exits 0 always
-(the decision is the output, not a pass/fail exit code) -- callers should read
-the JSON's "outcome" field.
+Writes runs/round_XXX/decision.json and always exits 0 (the decision is the
+output) -- callers read its "outcome" field.
 """
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import ConfigError, eprint, load_criteria_config, read_json, round_dir, write_json
-
-
-def check_accuracy(evaluation: dict, criteria: dict) -> list[str]:
-    """AIMD energy comparison -- the required, first-checked criterion.
-    Returns a list of human-readable failure reasons (empty if all pass)."""
-    acc = evaluation.get("accuracy", {})
-    eval_cfg = criteria["evaluation"]
-    if eval_cfg.get("energy_rmse_meV_per_atom_max") is None:
-        raise ConfigError(
-            "config/criteria.yaml evaluation.energy_rmse_meV_per_atom_max must be set -- "
-            "the AIMD energy comparison is the required evaluation criterion.")
-    failures = []
-
-    checks = [
-        ("energy_rmse", "energy_rmse_meV_per_atom_max", 1000, "meV/atom"),
-        ("force_rmse", "force_rmse_meV_per_A_max", 1000, "meV/A"),
-        ("virial_rmse", "virial_rmse_meV_per_atom_max", 1000, "meV/atom"),
-    ]
-    for metric_key, threshold_key, scale, unit in checks:
-        value = acc.get(metric_key)
-        threshold = eval_cfg.get(threshold_key)
-        if threshold is None:
-            continue
-        if value is None:
-            failures.append(f"{metric_key} unavailable (n_points={acc.get(metric_key.replace('_rmse', '_n_points'), 0)})")
-            continue
-        scaled = value * scale
-        if scaled > threshold:
-            failures.append(f"{metric_key}={scaled:.3f} {unit} exceeds max {threshold} {unit}")
-    return failures
+from _common import FINAL_NEP_DIR, ConfigError, eprint, load_criteria_config, read_json, round_dir, write_json
 
 
 def main():
@@ -66,41 +32,45 @@ def main():
     eval_path = r_dir / "evaluation.json"
     if not eval_path.exists():
         raise ConfigError(f"{eval_path} not found -- run evaluate_potential.py for round {args.round} first.")
-    evaluation = read_json(eval_path)
+    ev = read_json(eval_path)
 
-    if evaluation.get("status") == "training_not_complete":
-        decision = {"round": args.round, "outcome": "blocked",
-                    "reason": "NEP training job not complete yet.", "failures": []}
-        write_json(r_dir / "decision.json", decision)
-        print(f"[decide_next_step] Round {args.round}: BLOCKED (training not complete)")
-        return
-
-    accuracy_failures = check_accuracy(evaluation, criteria)
-
-    if accuracy_failures:
-        outcome = "insufficient"
-        reason = "AIMD energy comparison failed: " + "; ".join(accuracy_failures)
-    else:
-        outcome = "sufficient"
-        reason = "AIMD energy comparison met."
-
-    max_rounds = criteria["active_learning"].get("max_rounds", 5)
-    if outcome == "insufficient" and args.round + 1 >= max_rounds:
+    failures = []
+    if ev.get("status") == "training_not_complete":
+        outcome, reason = "blocked", "NEP training not complete yet."
+    elif ev["check_b"]["pending"]:
         outcome = "blocked"
-        reason = (f"Would loop back for round {args.round + 1}, but that reaches/exceeds "
-                  f"active_learning.max_rounds={max_rounds}. Raise max_rounds in "
-                  f"config/criteria.yaml if more rounds are warranted, or accept the "
-                  f"current potential and proceed manually. Original reason: {reason}")
+        reason = f"Check B AIMD reference not finished for: {', '.join(ev['check_b']['pending'])}."
+    else:
+        failures = [f"Check A: {f}" for f in ev["check_a"]["failures"]] + \
+                   [f"Check B: {f}" for f in ev["check_b"]["failures"]]
+        if failures:
+            outcome, reason = "insufficient", "; ".join(failures)
+        else:
+            outcome, reason = "sufficient", "Check A and Check B pass."
+
+    max_round = criteria["rounds"]["max_round"]
+    if outcome == "insufficient" and args.round >= max_round:
+        outcome = "blocked"
+        reason = (f"Round {args.round} is max_round={max_round} (N) and still fails, so no round "
+                  f"{args.round + 1}. Raise rounds.max_round in config/criteria.yaml if more rounds are "
+                  f"warranted. Failures: {reason}")
+
+    if outcome == "sufficient":
+        FINAL_NEP_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(r_dir / "nep_model" / "nep.txt", FINAL_NEP_DIR / "nep.txt")
+        write_json(FINAL_NEP_DIR / "final_nep.json", {"round": args.round, "evaluation": ev})
 
     decision = {
         "round": args.round,
         "outcome": outcome,   # "sufficient" | "insufficient" | "blocked"
         "reason": reason,
-        "accuracy_failures": accuracy_failures,
+        "failures": failures,
         "next_round": args.round + 1 if outcome == "insufficient" else None,
     }
     write_json(r_dir / "decision.json", decision)
     print(f"[decide_next_step] Round {args.round}: {outcome.upper()} -- {reason}")
+    if outcome == "sufficient":
+        print(f"[decide_next_step] Final NEP: {FINAL_NEP_DIR / 'nep.txt'}")
 
 
 if __name__ == "__main__":

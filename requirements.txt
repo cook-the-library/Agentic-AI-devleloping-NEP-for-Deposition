@@ -1,9 +1,8 @@
 # Install on whichever machine runs these scripts (typically the HPC login
-# node, or a local machine that then submits via a configured SLURM client).
+# node) and in the conda env named in config/clusters.yaml (common.conda_env).
 pyyaml>=6.0
-ase>=3.22
-jinja2>=3.0        # optional -- a minimal fallback templater is used if absent
 numpy>=1.23
-# Optional, only needed if config/criteria.yaml sets
-# deposition_sweep.optimization_method: bayesian
-scikit-optimize>=0.9
+scipy>=1.9
+ase>=3.23
+calorine>=2.0      # runs a trained NEP on CPU: Step 1 MD (rounds 1..N), Check A, Check B
+jinja2>=3.0        # optional -- a minimal fallback templater is used if absent

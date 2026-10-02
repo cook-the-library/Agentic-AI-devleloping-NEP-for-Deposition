@@ -12,9 +12,10 @@ anvil:
   qos: null                      # set if your allocation requires a QOS flag
   walltime_vasp: "04:00:00"
   walltime_nep: "24:00:00"
-  walltime_deposition: "08:00:00"
+  walltime_python: "12:00:00"     # Step 1 MD sampling with the previous NEP (rounds 1..N)
   nodes_vasp: 1
   ntasks_vasp: 128                # Anvil CPU nodes are 128 cores/node -- confirm for your queue
+  ntasks_python: 1
   modules:
     vasp:
       - "module load vasp/6.4.2"   # confirm exact module name/version with `module avail vasp`
@@ -22,16 +23,10 @@ anvil:
       - "module load gcc/11.2.0"
       - "module load cuda/11.7.0"
       - "module load gpumd"        # GPUMD/NEP is often self-built; adjust to your install
-    lammps:
-      - "module load gcc/11.2.0"
-      - "module load cuda/11.7.0"
-      - "module load lammps"       # must be a LAMMPS build with the NEP pair_style (pair_style nep) --
-                                     # stock LAMMPS modules usually do NOT include it; see references/hpc_notes.md
+    python: []                     # e.g. "module load anaconda" -- whatever provides conda for common.conda_env
   executables:
     vasp_std: "vasp_std"           # or full path if not on PATH after module load
     nep: "nep"                     # GPUMD's nep training binary
-    gpumd: "gpumd"                 # GPUMD's MD binary (deposition.sbatch.template)
-    lammps: "lmp"                  # LAMMPS binary with pair_style nep, used for deposition simulation
   scratch_dir: "FILL_ME_IN"        # e.g. /anvil/scratch/x-yourusername
 
 aces:
@@ -43,9 +38,10 @@ aces:
   qos: null
   walltime_vasp: "04:00:00"
   walltime_nep: "24:00:00"
-  walltime_deposition: "08:00:00"
+  walltime_python: "12:00:00"     # Step 1 MD sampling with the previous NEP (rounds 1..N)
   nodes_vasp: 1
   ntasks_vasp: 96                  # confirm cores/node for the ACES CPU partition you're using
+  ntasks_python: 1
   modules:
     vasp:
       - "module load intel/2022a"  # ACES uses the TAMU HPRC module toolchain -- confirm with `module spider vasp`
@@ -54,19 +50,14 @@ aces:
       - "module load GCC/11.3.0"
       - "module load CUDA/11.7.0"
       - "module load GPUMD"        # confirm exact module name with `module spider gpumd`, or use your own build
-    lammps:
-      - "module load GCC/11.3.0"
-      - "module load CUDA/11.7.0"
-      - "module load LAMMPS"       # must include the NEP pair_style -- likely a self-build, see references/hpc_notes.md
+    python: []
   executables:
     vasp_std: "vasp_std"
     nep: "nep"
-    gpumd: "gpumd"
-    lammps: "lmp"
   scratch_dir: "FILL_ME_IN"        # e.g. /scratch/user/yourusername
 
 # Applies to whichever cluster is selected at the CLI with --cluster
 common:
-  conda_env: "FILL_ME_IN"          # environment with ase/pymatgen/numpy for the Python pre/post steps, if used on-cluster
+  conda_env: "FILL_ME_IN"          # environment with requirements.txt installed (ase, calorine, ...), activated in SLURM Python jobs
   poll_interval_seconds: 60        # how often agentic_orchestrator.py polls `squeue` for job completion
   max_poll_hours: 48               # give up waiting (and flag for the human) past this

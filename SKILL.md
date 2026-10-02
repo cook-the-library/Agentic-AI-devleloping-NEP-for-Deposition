@@ -1,140 +1,135 @@
 ---
 name: nep-deposition-workflow
-description: Run the closed-loop "agentic AI" materials workflow for NEP-potential-driven deposition optimization — generating candidate structures, submitting VASP jobs, training a GPUMD NEP (neuroevolution potential), evaluating it against AIMD energy/force/virial accuracy, looping back to generate more training structures if the potential is insufficient, then using the trained NEP to simulate and optimize deposition conditions on an HPC cluster (Purdue Anvil or TAMU ACES). Use when the user mentions this workflow, NEP training, VASP+NEP active learning, deposition simulation/optimization, or Anvil/ACES job submission for this pipeline.
+description: Run the agentic AI workflow that develops a GPUMD NEP (neuroevolution potential) for deposition — resolving gas and solid species from the film, substrate and additional gas, generating 1000 unique structures per round (crystal-template families in round 0, amorphous and 0–50 eV collision MD with the previous NEP afterwards), labelling them with VASP DFT, training the NEP on the whole unique dataset, and checking held-out test loss (Check A) and AIMD vs NEP energy trends for gas hitting a substrate, a film and a film on substrate (Check B), repeating up to round N = 4 until every check passes, on Purdue Anvil or TAMU ACES. Use when the user mentions this workflow, NEP training for deposition, VASP+NEP active learning, or Anvil/ACES job submission for this pipeline.
 ---
 
-# NEP-Driven Deposition Optimization — Agentic Workflow
+# Agentic AI for NEP Development in Deposition
 
-This skill packages the closed-loop workflow below into runnable stages. Each stage is a
-script under `scripts/`. Claude's job when this skill is invoked is to act as the
-orchestrator: figure out which stage the user is at, run/help run that stage, interpret
-its output, and decide (per the rules below) whether to advance or loop back — the same
-way the diagram does.
+Neuroevolution potentials (NEP) trained in rounds that grow their own dataset until
+every check passes. Each step is a script under `scripts/`. When this skill is invoked,
+Claude acts as the orchestrator: work out which step the user is at, run (or help run)
+it, read its output, and follow the decision rules below.
 
-## The loop
+## The workflow
 
 ```
-┌─────────────────────┐   submit VASP jobs   ┌──────────────┐   train NEP   ┌────────────────────────┐
-│ 1. Generate          │ ───(comp. resource)──▶│ 2. VASP AIMD │──(comp.     ─▶│ 3. Evaluation criterion: │
-│    structures for    │                       │    jobs      │  resource)   │    energy vs AIMD        │
-│    deposition        │                       └──────────────┘              │                          │
-└───────────▲───────────┘                                                    └────────────┬─────────────┘
-            │                                                                              │
-            │            generate more structures if insufficient                          │ sufficient
-            └──────────────────────────────────────────────────────────────────────────────┘potential
-                                                                                             │
-                                                                                             ▼
-┌──────────────────┐   run NEP    ┌───────────────────┐   generate dep.  ┌─────────────────────────────┐
-│ 6. Find optimal   │◀─(comp.    ─│ 5. Optimize        │◀── sim. setup ───│ 4. Identify deposition setup │
-│    conditions     │  resource)  │    deposition based │                  │    correlating experiment    │
-└────────────────────┘             │    on criteria      │                  └─────────────────────────────┘
-                                    └────────────────────┘
+INPUT            STEP 0 · ONCE          ROUND r = 0 … N  (max N = 4)                                   ALL PASS
+Film        ──▶  Resolve species   ──▶  STEP 1 Generate ──▶ STEP 2 Label & train ──▶ STEP 3 Evaluate ──▶ Final NEP
+Substrate        adds gas and solid      1000 unique         DFT labels, then          test loss and      ready for
+Additional gas   compounds               structures          NEP fit                   AIMD collisions    deposition MD
+                 gas: fragments,              ▲                    │                         │
+                      inert gas               │      Unique dataset R0 R1 R2 … RN            │
+                 solid: elements,             │      exact-duplicate check,                  │
+                        interfacial           │      append · train on all                   │
+                        compounds             └──────────── any check fails → repeat ────────┘
 ```
 
-Stages, in order, and the script that implements each:
+| Step | Script | What it does |
+|---|---|---|
+| INPUT | `config/system.yaml` | Film, substrate, additional gas, inert gas, interfacial compounds |
+| Step 0 · once | `resolve_species.py` | Adds gas species (molecules, every fragment, inert gas) and solids (film, substrate, elemental crystals, interfacial compounds) → `runs/species.json` |
+| Step 1 | `generate_structures.py` | 1000 unique structures per round (see below) |
+| Step 2 | `submit_vasp.py`, `vasp_to_nep_dataset.py`, `submit_nep_training.py` | DFT labels; append to the unique dataset; NEP fit on all rounds |
+| Step 3 | `evaluate_potential.py`, `decide_next_step.py` | Check A and Check B; final NEP or repeat |
+| Check B reference | `setup_check_b.py` | AIMD of gas hitting a substrate, a film, a film on substrate (run once, with round 0) |
+| All of it | `agentic_orchestrator.py` | Runs the loop, waiting on SLURM between steps |
 
-1. **Generate structures for deposition** — `scripts/generate_structures.py`
-2. **Submit VASP jobs** (on Anvil or ACES) — `scripts/submit_vasp.py`
-3. **Train NEP** (on Anvil or ACES) — `scripts/vasp_to_nep_dataset.py` then `scripts/submit_nep_training.py`
-4. **Evaluate** — `scripts/evaluate_potential.py`: NEP energy/force/virial RMSE against the
-   VASP AIMD test set. If any threshold fails, the round is `insufficient`.
-5. **Decision: sufficient potential?** — `scripts/decide_next_step.py`
-   - `insufficient` → go back to stage 1, generating a new round of structures (active-learning style, biased toward the configurations the current NEP got most wrong)
-   - `sufficient` → continue to stage 6
-6. **Identify deposition setup correlating experiment** — `scripts/identify_deposition_setup.py`
-7. **Generate deposition simulation setup** — `scripts/generate_deposition_simulation.py`
-8. **Optimize deposition based on criteria** (run NEP on Anvil/ACES) — `scripts/submit_deposition_optimization.py`
-9. **Find optimal conditions** — `scripts/find_optimal_conditions.py`
+### Step 1 · the 1000 structures of each round
 
-`scripts/agentic_orchestrator.py` drives stages 1–9 end to end, polling SLURM between
-compute-resource stages and calling the decision function at stage 5. Claude can run it
-directly, or run stages one at a time when the user wants to inspect intermediate output
-(recommended the first time through, since VASP/NEP settings are project-specific).
+**Round 0** — built from crystal templates, no NEP yet: **bulk, slab, interface, dimer,
+trimer, cluster, adsorbate**. Also sampled: strained and rattled cells, point defects,
+gas molecules and fragments, interfacial compounds, short-range repulsion.
+
+**Rounds 1 … N** — MD with the previous NEP: **amorphous** (melt-quench) and
+**collision** (gas molecules, fragments and inert atoms hitting the substrate, the film
+and the film on substrate; impacts span 0–50 eV). The round-0 families stay in,
+weighted toward the worst-loss buckets of the previous round's Check A.
+
+Every structure passes an exact-duplicate check against the whole dataset R0..RN, so
+each round adds 1000 new unique structures. Family shares, sizes and MD settings are in
+`config/sampling.yaml`.
+
+### Step 3 · checks after every training round (`config/criteria.yaml`)
+
+- **Check A · held-out test loss** — energy ≤ 10 meV/atom, force ≤ 250 meV/Å,
+  stress ≤ 250 (virial, meV/atom). Reported overall and per bucket (family).
+- **Check B · AIMD vs NEP energy trend, gas hits** a substrate, a film, a film on
+  substrate. The NEP is evaluated on the AIMD frames and both E(t) curves, shifted to
+  start at zero, must agree within `energy_trend_rmse_meV_per_atom_max`.
+
+Both within criterion → **final NEP** (`runs/final_nep/nep.txt`). Otherwise the round is
+repeated with more structures where the loss is worst, up to round N = 4
+(`rounds.max_round`); a round N that still fails stops as `blocked` for a human.
 
 ## Before running anything
 
-This skill ships with placeholders, not your credentials or allocation details. Before
-the first real run, fill in:
+Fill in every `FILL_ME_IN` and review the defaults:
 
-1. **`config/clusters.yaml`** — SLURM account, partition/queue, module names, and
-   VASP/GPUMD executable paths for Anvil and ACES. See `references/hpc_notes.md`.
-2. **`config/criteria.yaml`** — thresholds for "sufficient potential" (energy/force/virial
-   RMSE vs AIMD) and the deposition
-   parameter ranges to explore (temperature, incident energy, angle, flux, substrate).
-3. **`config/experiment_correlations.yaml`** — the real experimental deposition setup
-   (technique, substrate, measured target TBC/kappa) that stage 6 correlates against.
-   Leave a field blank/`null` if there's no experimental value yet — the workflow will
-   optimize toward the simulated criteria alone in that case.
+1. **`config/system.yaml`** — film and substrate formulas, crystal template files and
+   surfaces; gas molecules; inert gas; templates for interfacial compounds and for any
+   element ASE can't build (Step 0 tells you which).
+2. **`config/clusters.yaml`** — SLURM account, partitions, modules, executables and the
+   conda env for Step 1's MD job. See `references/hpc_notes.md`.
+3. **`config/dft.yaml`** — INCAR defaults, KSPACING, spin, structures per SLURM job.
+   Check ENCUT/KSPACING convergence for your system.
+4. **`config/sampling.yaml`** and **`config/criteria.yaml`** — family shares, MD
+   settings, check thresholds and Check B's impact energy.
+5. `VASP_PP_PATH` pointing at your POTCAR directory.
 
-None of the scripts fabricate materials-science numbers; unfilled config is treated as
-"ask the user" rather than guessed.
+Nothing here fabricates materials-science inputs: unfilled config stops the step with a
+message rather than being guessed.
 
-## Running a stage
+## Running
 
-Every script takes `--round N` (which training-data generation round it's operating on,
-starting at 0) and `--cluster {anvil,aces}` where relevant, and reads/writes under a
-single `runs/` working directory so state is inspectable and resumable:
-
-```
-runs/
-  round_000/
-    structures/          # stage 1 output (POSCARs)
-    vasp/                # stage 2 output (per-structure VASP dirs + job ids)
-    nep_dataset/          # stage 3a output (train.xyz / test.xyz)
-    nep_model/            # stage 3b output (nep.txt, loss.out, job id)
-    evaluation.json        # stage 4 output (AIMD RMSEs, verdict inputs)
-    decision.json           # stage 5 output ({"sufficient": bool, "reason": ...})
-  round_001/               # only created if round_000 was insufficient
-    ...
-deposition/
-  setup.json                # stage 6 output
-  sim_inputs/                # stage 7 output
-  sweep/                      # stage 8 output (per-condition sim dirs + job ids)
-  optimal_conditions.json      # stage 9 output — the end goal
-```
-
-Run an individual stage, e.g.:
+Step by step (recommended the first time, to inspect each output):
 
 ```bash
-python scripts/generate_structures.py --round 0 --n-structures 40
+python scripts/resolve_species.py
+python scripts/generate_structures.py --round 0
 python scripts/submit_vasp.py --round 0 --cluster anvil
-python scripts/vasp_to_nep_dataset.py --round 0
+python scripts/setup_check_b.py --cluster anvil
+python scripts/vasp_to_nep_dataset.py --round 0         # once the VASP jobs finish
 python scripts/submit_nep_training.py --round 0 --cluster anvil
-python scripts/evaluate_potential.py --round 0 --cluster anvil
+python scripts/evaluate_potential.py --round 0           # once training and Check B AIMD finish
 python scripts/decide_next_step.py --round 0
 ```
 
-Or run the whole loop unattended once the config is trustworthy:
+`submit_vasp.py`, `setup_check_b.py` and `submit_nep_training.py` take `--dry-run` to
+render inputs without submitting. Or run the whole loop:
 
 ```bash
-python scripts/agentic_orchestrator.py --cluster anvil --max-rounds 5
+python scripts/agentic_orchestrator.py --cluster anvil
 ```
 
-`agentic_orchestrator.py` exits (rather than looping forever) once
-`decide_next_step.py` reports `sufficient: true`, once `--max-rounds` is hit, or if a
-SLURM job fails — in the last case it stops and reports the failing job so the human
-stays in the loop for anything compute-cluster related that this skill cannot fix
-itself (queue limits, module errors, VASP convergence failures, license issues, etc.).
+The orchestrator stops when the decision is `sufficient` (final NEP written), when it is
+`blocked`, or when a stage or SLURM job fails, reporting why, so the human stays in the
+loop for anything cluster-side (queue limits, modules, VASP convergence, licences).
+
+## Layout of `runs/`
+
+```
+runs/
+  species.json                  # Step 0
+  check_b/<target>/             # Check B AIMD reference (substrate, film, film_on_substrate)
+  round_000/
+    structures/ structures_manifest.json   # Step 1 (family, hash per structure)
+    vasp/                                  # Step 2 DFT labels (+ _jobs/ batch scripts, job_ids.json)
+    nep_dataset/ train.xyz test.xyz        # Step 2, all rounds 0..r
+    nep_model/ nep.txt                     # Step 2 NEP fit
+    evaluation.json check_b_series.json    # Step 3 checks
+    decision.json                          # Step 3 decision
+  round_001/ …                             # only if round 0 failed a check
+  final_nep/nep.txt                        # ALL PASS
+```
 
 ## What Claude should do vs. what the human must do
 
-Claude (running this skill) should: generate structures, render and submit job
-scripts, parse VASP/NEP output, compute evaluation metrics, make the sufficient/loop-back
-call using the configured thresholds, build deposition simulation inputs, and summarize
-results.
+Claude should: resolve species, generate structures, render and submit jobs, parse VASP
+and NEP output, run the checks, make the repeat/final call from the configured
+thresholds, and summarise results — including the worst-loss buckets and the Check B
+E(t) curves.
 
-Claude should NOT: invent SLURM account numbers, partition names, VASP pseudopotential
-choices, or experimental TBC/kappa target values. If `config/*.yaml` still has a
-placeholder (`FILL_ME_IN`) where a stage needs a real value, stop and ask the user for
-it rather than guessing — a wrong SLURM account fails fast and loudly, but a wrong
-INCAR/experimental-target choice can silently waste a large compute allocation.
-
-## Compute resources: Anvil vs ACES
-
-Both are SLURM clusters, so the stage scripts are cluster-agnostic Python that renders
-a small Jinja-style `.sbatch` template per cluster (`templates/vasp_<cluster>.sbatch`,
-`templates/nep_<cluster>.sbatch`, `templates/deposition_<cluster>.sbatch`) and submits
-with `sbatch`. The differences that matter are account/partition names, module load
-lines, and executable paths — all isolated in `config/clusters.yaml`. See
-`references/hpc_notes.md` for what to fill in and how to verify it (`sinfo`, `module
-avail`, your ACCESS/TAMU HPRC allocation page) before the first submission.
+Claude should NOT invent SLURM accounts, partition names, POTCAR choices, crystal
+templates, or interfacial compounds. If a config value a step needs is still
+`FILL_ME_IN`, stop and ask — a wrong SLURM account fails loudly, but a wrong template or
+INCAR choice silently wastes allocation.

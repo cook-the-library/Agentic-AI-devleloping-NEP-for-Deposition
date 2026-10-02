@@ -2,8 +2,8 @@
 # Defaults are starting points, NOT validated for your material system.
 
 structures_per_round: 1000       # unique structures per round (after the exact-duplicate check)
-max_atoms: 128                   # per structure, keeps DFT labelling affordable
-isolated_vacuum_A: 6.0           # vacuum on each side of gas / dimer / trimer / cluster boxes
+max_atoms: 120                   # per structure; hard limit 120 (larger values are capped)
+isolated_vacuum_A: 6.0           # vacuum on each side of gas / dimer / trimer boxes
 slab_vacuum_A: 12.0              # vacuum above slab, interface and adsorbate cells
 seed: 0
 
@@ -17,18 +17,22 @@ round0:
     interface: 2     # film on substrate
     dimer: 1
     trimer: 1
-    cluster: 1
     adsorbate: 2     # gas molecules, fragments and inert atoms on film/substrate surfaces
-    defect: 1        # point defects: vacancy, substitution, interstitial
+    defect: 1        # a single point defect in bulk: vacancy, substitution or interstitial
     gas: 1           # isolated gas molecules, fragments and atoms
     compound: 1      # interfacial compounds
     repulsion: 1     # short-range repulsion: dimers/trimers at very short distances
   strain_max: 0.05               # strained cells: each strain component in [-strain_max, +strain_max]
   rattle_A: [0.01, 0.15]         # rattled cells: Gaussian displacement stdev range
+  # Vacancies and interstitials in solid structures: bulk, compound, slab,
+  # interface, the slab under an adsorbate, and the MD starting cells
+  # (amorphous, collision targets) in rounds 1..N.
+  point_defects:
+    fraction: 0.5                # share of solid structures that get point defects (the rest stay pristine)
+    max_per_structure: 2         # 1..max vacancies/interstitials, each chosen at random
   slab_layers: 4
   interface_gap_A: [1.8, 2.6]    # film-substrate spacing
   interface_max_strain: 0.08     # largest lateral strain allowed to fit the film onto the substrate
-  cluster_atoms: [4, 13]
   dimer_distance_scale: [0.8, 2.5]       # x (sum of covalent radii)
   repulsion_distance_scale: [0.35, 0.8]  # x (sum of covalent radii)
   adsorbate_height_A: [1.0, 3.0]

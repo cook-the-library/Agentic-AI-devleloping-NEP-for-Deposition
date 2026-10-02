@@ -35,7 +35,7 @@ from _common import (
     require_filled,
     write_json,
 )
-from generate_structures import Builder
+from generate_structures import HARD_MAX_ATOMS, Builder
 from submit_vasp import incar_for_family, load_dft_config, poscar_symbols, submit_batches, write_incar, write_potcar
 
 
@@ -70,6 +70,8 @@ def build_system(builder: Builder, target: str, proj, cb: dict):
     proj.positions += [centre[0], centre[1], top + cb["start_height_A"]]
     speed = math.sqrt(2 * cb["impact_energy_eV"] / proj.get_masses().sum())  # Angstrom/(ASE time unit)
     a = slab + proj
+    if len(a) > HARD_MAX_ATOMS:
+        raise ConfigError(f"Check B {target}: {len(a)} atoms exceeds the {HARD_MAX_ATOMS}-atom limit.")
     a.set_cell(cell)
     a.set_pbc(True)
     v = np.zeros((len(a), 3))

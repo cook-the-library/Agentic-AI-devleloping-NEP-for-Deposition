@@ -16,12 +16,12 @@ incar:
   KGAMMA: true
 
 # Families in vacuum boxes: Gamma point only, spin polarised (radicals, atoms).
-isolated_families: [dimer, trimer, cluster, gas, repulsion]
+isolated_families: [dimer, trimer, gas, repulsion]
 isolated_kspacing: 10.0
 
 # Spin polarised families (fragments and radicals on surfaces). Add more if
 # your film or substrate is magnetic.
-spin_polarized_families: [dimer, trimer, cluster, gas, repulsion, adsorbate, collision]
+spin_polarized_families: [dimer, trimer, gas, repulsion, adsorbate, collision]
 
 # Families whose stress is used for training (periodic in all three
 # directions). Slabs and vacuum boxes keep energy and forces only.

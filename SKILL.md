@@ -37,16 +37,19 @@ Additional gas   compounds               structures          NEP fit            
 ### Step 1 · the 1000 structures of each round
 
 **Round 0** — built from crystal templates, no NEP yet: **bulk, slab, interface, dimer,
-trimer, cluster, adsorbate**. Also sampled: strained and rattled cells, point defects,
-gas molecules and fragments, interfacial compounds, short-range repulsion.
+trimer, adsorbate**. Also sampled: strained and rattled cells, point defects,
+gas molecules and fragments, interfacial compounds, short-range repulsion. Solid
+structures (bulk, compound, slab, interface, the slab under an adsorbate, and the MD
+starting cells in later rounds) carry vacancies and interstitials
+(`round0.point_defects`).
 
 **Rounds 1 … N** — MD with the previous NEP: **amorphous** (melt-quench) and
 **collision** (gas molecules, fragments and inert atoms hitting the substrate, the film
 and the film on substrate; impacts span 0–50 eV). The round-0 families stay in,
 weighted toward the worst-loss buckets of the previous round's Check A.
 
-Every structure passes an exact-duplicate check against the whole dataset R0..RN, so
-each round adds 1000 new unique structures. Family shares, sizes and MD settings are in
+Every structure has at most 120 atoms (hard limit) and passes an exact-duplicate check
+against the whole dataset R0..RN, so each round adds 1000 new unique structures. Family shares, sizes and MD settings are in
 `config/sampling.yaml`.
 
 ### Step 3 · checks after every training round (`config/criteria.yaml`)

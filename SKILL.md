@@ -34,6 +34,20 @@ Additional gas   compounds               structures          NEP fit            
 | Check B reference | `setup_check_b.py` | AIMD of gas hitting a substrate, a film, a film on substrate (run once, with round 0) |
 | All of it | `agentic_orchestrator.py` | Runs the loop, waiting on SLURM between steps |
 
+Each step has a reference page with its inputs, outputs, settings and common stops:
+`references/step0_resolve_species.md`, `references/step1_generate.md`,
+`references/step2_label_train.md`, `references/step3_evaluate.md`; and
+`references/reading_results.md` for reading a round and recovering from a failed or
+blocked one. Read the page for a step before running or debugging it.
+
+### Step 0 · resolve species (once)
+
+From the INPUT, `resolve_species.py` adds every gas fragment of the gas molecules
+(NH3 → NH2, NH, N, H), the inert gas, an elemental crystal for each non-gas element
+(diatomic/atomic elements stay gas-only), the listed interfacial compounds and every
+solid's melting point. It cannot predict which interfacial compounds form: it lists the
+element pairs that have none, and Claude asks the user about them rather than adding any.
+
 ### Step 1 · the 1000 structures of each round
 
 **Round 0** — built from crystal templates, no NEP yet: **bulk, slab, interface, dimer,
@@ -52,23 +66,45 @@ gas molecules and fragments, interfacial compounds, short-range repulsion.
 **Rounds 1 … N** — MD with the previous NEP: **amorphous** (melt-quench) and
 **collision** (gas molecules, fragments and inert atoms hitting the substrate, the film
 and the film on substrate; impacts span 0–50 eV). The round-0 families stay in,
-weighted toward the worst-loss buckets of the previous round's Check A.
+weighted toward the worst-loss buckets of the previous round's Check A. This MD needs
+compute, so the orchestrator runs Step 1 of rounds 1 … N as a SLURM job.
 
 Every structure has at most 120 atoms (hard limit) and passes an exact-duplicate check
 against the whole dataset R0..RN, so each round adds 1000 new unique structures. Family shares, sizes and MD settings are in
-`config/sampling.yaml`.
+`config/sampling.yaml`. The usual Step 1 stop is an interface that won't fit within
+`interface_max_strain` under the atom limit: ask the user whether to loosen the strain or
+change the surfaces.
+
+### Step 2 · label & train
+
+- **DFT labels** (`submit_vasp.py`): VASP single points, settings per family from
+  `config/dft.yaml` (Gamma-only and spin-polarised for vacuum boxes and radicals), packed 25
+  structures per SLURM job. Each run ends `VASP_DONE` or `VASP_FAILED`.
+- **Unique dataset** (`vasp_to_nep_dataset.py`): finished runs from rounds 0 … r together,
+  each tagged with its family as the Check A bucket, stress kept only for fully periodic
+  families, and a train/test split fixed per structure so test data stays held out.
+- **NEP fit** (`submit_nep_training.py`): GPUMD `nep` with standard NEP4 settings, not
+  tuned for the system.
 
 ### Step 3 · checks after every training round (`config/criteria.yaml`)
 
 - **Check A · held-out test loss** — energy ≤ 10 meV/atom, force ≤ 250 meV/Å,
   stress ≤ 250 (virial, meV/atom). Reported overall and per bucket (family).
 - **Check B · AIMD vs NEP energy trend, gas hits** a substrate, a film, a film on
-  substrate. The NEP is evaluated on the AIMD frames and both E(t) curves, shifted to
-  start at zero, must agree within `energy_trend_rmse_meV_per_atom_max`.
+  substrate. The AIMD reference runs once, with round 0 (`setup_check_b.py`): the first
+  gas molecule falls straight down at 10 eV onto each pristine target, NVE for 300 × 0.5 fs.
+  Each round the NEP is evaluated on those AIMD frames; both E(t) curves, shifted to start
+  at zero, must agree within 10 meV/atom (`energy_trend_rmse_meV_per_atom_max`).
 
 Both within criterion → **final NEP** (`runs/final_nep/nep.txt`). Otherwise the round is
 repeated with more structures where the loss is worst, up to round N = 4
-(`rounds.max_round`); a round N that still fails stops as `blocked` for a human.
+(`rounds.max_round`). `blocked` means a human must step in: training or the Check B AIMD
+hasn't finished, or round N still fails.
+
+After every round, report the Check A RMSEs against their thresholds, the three worst
+buckets, each Check B target's RMSE and the decision; when a round fails or blocks, use
+`references/reading_results.md` to say whether more data will help or something else
+(sampling weights, `nep.in`, VASP settings) needs the user's decision.
 
 ## Before running anything
 

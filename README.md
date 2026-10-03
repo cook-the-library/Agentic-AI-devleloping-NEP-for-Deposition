@@ -3,6 +3,11 @@
 Neuroevolution potentials (NEP) trained in rounds that grow their own dataset until
 every check passes, on Purdue Anvil or TAMU ACES.
 
+![The workflow on one slide](docs/workflow_slide.png)
+
+The slide is also in [`docs/workflow_slide.html`](docs/workflow_slide.html) (open in a
+browser; it scales to the window).
+
 1. **Input**: the film, the substrate and an additional gas.
 2. **Step 0** (once): resolve the gas species (fragments, inert gas) and the solid ones
    (elements, interfacial compounds).
@@ -16,7 +21,10 @@ every check passes, on Purdue Anvil or TAMU ACES.
      this is the **final NEP**, ready for deposition MD. If either fails, repeat the
      round.
 
-Full step-by-step docs are in [`SKILL.md`](SKILL.md); cluster setup notes are in
+Full step-by-step docs are in [`SKILL.md`](SKILL.md), with a reference page per step
+in [`references/`](references/) (inputs, outputs, settings and common stops) and
+[`references/reading_results.md`](references/reading_results.md) for reading a round and
+recovering from a failure; cluster setup notes are in
 [`references/hpc_notes.md`](references/hpc_notes.md).
 
 ## Quick start
@@ -36,6 +44,7 @@ python scripts/agentic_orchestrator.py --cluster anvil
 | `scripts/` | One script per step, plus `agentic_orchestrator.py` and shared helpers in `_common.py` |
 | `config/` | `system.yaml` (input), `sampling.yaml` (Step 1), `dft.yaml` (Step 2), `criteria.yaml` (Step 3), `clusters.yaml` |
 | `templates/` | SLURM `.sbatch` templates for VASP, NEP training and Step 1 MD sampling |
-| `references/` | HPC notes for Anvil vs ACES |
+| `references/` | One page per step, reading results and recovery, HPC notes for Anvil vs ACES |
+| `docs/` | The workflow slide (PNG and HTML) |
 
 Outputs go to `runs/` (git-ignored); the final potential is `runs/final_nep/nep.txt`.

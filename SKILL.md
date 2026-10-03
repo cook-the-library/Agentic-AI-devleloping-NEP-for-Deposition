@@ -46,8 +46,8 @@ gas molecules and fragments, interfacial compounds, short-range repulsion.
   interface, the slab under an adsorbate, and the MD starting cells in later rounds)
   get 0–15 % vacancies and 0–10 % interstitials, drawn per structure
   (`round0.point_defects`). Every non-pristine structure gets small thermal rattling:
-  Maxwell-Boltzmann displacements at a temperature drawn per structure
-  (`round0.thermal_rattle`).
+  Maxwell-Boltzmann displacements at 10–50 % of the melting point of the crystal it
+  is built from (`round0.thermal_rattle`).
 
 **Rounds 1 … N** — MD with the previous NEP: **amorphous** (melt-quench) and
 **collision** (gas molecules, fragments and inert atoms hitting the substrate, the film
@@ -76,7 +76,11 @@ Fill in every `FILL_ME_IN` and review the defaults:
 
 1. **`config/system.yaml`** — film and substrate formulas, crystal template files and
    surfaces; gas molecules; inert gas; templates for interfacial compounds and for any
-   element ASE can't build (Step 0 tells you which).
+   element ASE can't build (Step 0 tells you which); melting points of the film,
+   substrate, every interfacial compound and every elemental crystal (Step 0 lists
+   missing ones). Claude may look these up (web search) — say which source each value
+   came from, and use the decomposition temperature for compounds that decompose
+   before melting.
 2. **`config/clusters.yaml`** — SLURM account, partitions, modules, executables and the
    conda env for Step 1's MD job. See `references/hpc_notes.md`.
 3. **`config/dft.yaml`** — INCAR defaults, KSPACING, spin, structures per SLURM job.

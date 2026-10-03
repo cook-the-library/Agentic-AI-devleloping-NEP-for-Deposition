@@ -2,16 +2,23 @@
 # Step 0 (resolve_species.py) reads this once and adds the gas and solid
 # species the training data must cover (gas fragments, inert gas, elements,
 # interfacial compounds). Paths are relative to the repository root.
+#
+# Melting points (K) set the thermal-rattling temperature of every structure
+# built from a crystal (config/sampling.yaml, round0.thermal_rattle). Use
+# literature values; for a compound that decomposes before melting, use its
+# decomposition temperature.
 
 film:
   formula: "FILL_ME_IN"            # e.g. "GaN"
   structure_file: "FILL_ME_IN"     # crystal template (CIF/POSCAR/extxyz), e.g. "structures/GaN.cif"
   surface: [0, 0, 1]               # Miller index of the growth surface
+  melting_point_K: "FILL_ME_IN"
 
 substrate:
   formula: "FILL_ME_IN"            # e.g. "Si"
   structure_file: "FILL_ME_IN"     # crystal template, e.g. "structures/Si.cif"
   surface: [0, 0, 1]
+  melting_point_K: "FILL_ME_IN"
 
 gas:
   # Additional (reactive) gas. Each entry is either a molecule name that
@@ -26,9 +33,14 @@ gas:
 # other element (e.g. Ga, which is orthorhombic). Example:
 #   Ga: "structures/Ga.cif"
 element_structures: {}
+# Melting point (K) of every elemental crystal Step 0 adds; it stops and lists
+# any that are missing. Example:
+#   Ga: 302.9
+#   Si: 1687
+element_melting_points_K: {}
 
 # Interfacial compounds added in Step 0. Step 0 lists every film/substrate
 # element pair; give a crystal template for each compound that can form at the
 # interface (it cannot predict which ones do). Example:
-#   - {formula: "Si3N4", structure_file: "structures/Si3N4.cif"}
+#   - {formula: "Si3N4", structure_file: "structures/Si3N4.cif", melting_point_K: 2173}
 interfacial_compounds: []

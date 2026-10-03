@@ -119,6 +119,16 @@ def element_crystal(symbol: str, templates: dict):
         f"under element_structures in config/system.yaml (e.g. {symbol}: structures/{symbol}.cif).")
 
 
+def melting_point(value, context: str) -> float:
+    try:
+        t = float(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"config/system.yaml: {context} melting point is not set (got {value!r}).") from None
+    if t <= 0:
+        raise ConfigError(f"config/system.yaml: {context} melting point must be positive (got {t}).")
+    return t
+
+
 def main():
     argparse.ArgumentParser(description=__doc__).parse_args()
     require_ase()
@@ -148,7 +158,9 @@ def main():
     compounds = []
     for entry in cfg.get("interfacial_compounds") or []:
         atoms = read_template(entry.get("structure_file"), f"interfacial compound '{entry.get('formula')}'")
-        compounds.append({"formula": entry["formula"], "structure": atoms_to_dict(atoms)})
+        compounds.append({"formula": entry["formula"], "structure": atoms_to_dict(atoms),
+                          "melting_point_K": melting_point(entry.get("melting_point_K"),
+                                                           f"interfacial compound {entry['formula']}")})
 
     film_el = set(film.get_chemical_symbols())
     sub_el = set(substrate.get_chemical_symbols())
@@ -157,6 +169,12 @@ def main():
     gas_only_el = [s for s in all_el if s in inert or is_gas_element(s)]
     templates = cfg.get("element_structures") or {}
     solid_el = {s: atoms_to_dict(element_crystal(s, templates)) for s in all_el if s not in gas_only_el}
+    el_tm = cfg.get("element_melting_points_K") or {}
+    missing = [s for s in solid_el if s not in el_tm]
+    if missing:
+        raise ConfigError(f"config/system.yaml: element_melting_points_K is missing {missing} "
+                          f"(Step 0 adds these elemental crystals).")
+    el_tm = {s: melting_point(el_tm[s], f"element {s}") for s in solid_el}
 
     # Interfacial compounds: report every film/gas element x substrate element
     # pair, and which ones have a template.
@@ -172,9 +190,11 @@ def main():
 
     species = {
         "film": {"formula": cfg["film"]["formula"], "surface": cfg["film"]["surface"],
-                 "structure": atoms_to_dict(film)},
+                 "structure": atoms_to_dict(film),
+                 "melting_point_K": melting_point(cfg["film"].get("melting_point_K"), "film")},
         "substrate": {"formula": cfg["substrate"]["formula"], "surface": cfg["substrate"]["surface"],
-                      "structure": atoms_to_dict(substrate)},
+                      "structure": atoms_to_dict(substrate),
+                      "melting_point_K": melting_point(cfg["substrate"].get("melting_point_K"), "substrate")},
         "gas": {
             "molecules": {k: atoms_to_dict(v) for k, v in molecules.items()},
             "fragments": {k: atoms_to_dict(v) for k, v in gas_fragments.items()},
@@ -182,6 +202,7 @@ def main():
         },
         "solid": {
             "elements": solid_el,
+            "element_melting_points_K": el_tm,
             "interfacial_compounds": compounds,
         },
         "elements": sorted(set(all_el) | set(inert)),

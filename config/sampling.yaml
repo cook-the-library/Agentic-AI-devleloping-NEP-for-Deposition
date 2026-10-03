@@ -38,10 +38,13 @@ round0:
   # Small thermal rattling of every non-pristine structure: Maxwell-Boltzmann
   # displacements of an atom in a harmonic well of stiffness k at temperature
   # T (each component Gaussian with variance k_B*T/k, so the displacement
-  # length follows the Maxwell distribution). T is drawn per structure; at
-  # k = 5 eV/A^2, 50-500 K gives an rms displacement of 0.03-0.09 A per component.
+  # length follows the Maxwell distribution). T is drawn per structure as a
+  # fraction of the melting point (config/system.yaml) of the crystal it is
+  # built from: the lower of film and substrate for interfaces, the film's for
+  # gas, dimers and trimers. E.g. Si (1687 K): 170-840 K, an
+  # rms displacement of 0.05-0.12 A per component at k = 5 eV/A^2.
   thermal_rattle:
-    temperature_K: [50, 500]
+    temperature_fraction_of_melting: [0.1, 0.5]
     force_constant_eV_per_A2: 5.0
   strain_max: 0.05               # strained cells (non-pristine): each strain component in [-strain_max, +strain_max]
   slab_layers: 4

@@ -23,7 +23,8 @@ Pristine vs. non-pristine (round 0):
                 cells) get vacancies (0-15 % of their atoms) and interstitials
                 (0-10 %), drawn per structure. Every non-pristine structure
                 gets small thermal rattling: Maxwell-Boltzmann displacements
-                at a temperature drawn per structure.
+                at a temperature drawn per structure as a fraction of the
+                melting point of the crystal it is built from.
 
 No structure has more than HARD_MAX_ATOMS (120) atoms, whatever
 config/sampling.yaml's max_atoms says.
@@ -74,21 +75,31 @@ class Builder:
         self.max_atoms = min(cfg["max_atoms"], HARD_MAX_ATOMS)
 
     # ---- species --------------------------------------------------------
+    # Every crystal carries its melting point in atoms.info["melting_point_K"];
+    # repeats, defects, strain and slab + adsorbate keep it, and
+    # thermal_rattle reads it.
+    @staticmethod
+    def _crystal(structure: dict, tm: float):
+        a = dict_to_atoms(structure)
+        a.info["melting_point_K"] = tm
+        return a
+
     @functools.cached_property
     def film(self):
-        return dict_to_atoms(self.sp["film"]["structure"])
+        return self._crystal(self.sp["film"]["structure"], self.sp["film"]["melting_point_K"])
 
     @functools.cached_property
     def substrate(self):
-        return dict_to_atoms(self.sp["substrate"]["structure"])
+        return self._crystal(self.sp["substrate"]["structure"], self.sp["substrate"]["melting_point_K"])
 
     @functools.cached_property
     def elements(self):
-        return {k: dict_to_atoms(v) for k, v in self.sp["solid"]["elements"].items()}
+        tm = self.sp["solid"]["element_melting_points_K"]
+        return {k: self._crystal(v, tm[k]) for k, v in self.sp["solid"]["elements"].items()}
 
     @functools.cached_property
     def compounds(self):
-        return [dict_to_atoms(c["structure"]) for c in self.sp["solid"]["interfacial_compounds"]]
+        return [self._crystal(c["structure"], c["melting_point_K"]) for c in self.sp["solid"]["interfacial_compounds"]]
 
     @functools.cached_property
     def gas_species(self):
@@ -132,11 +143,16 @@ class Builder:
         stiffness k at temperature T is displaced following the Maxwell-
         Boltzmann distribution: each Cartesian component is Gaussian with
         variance k_B*T/k, so the length of the displacement follows the
-        Maxwell distribution. T is drawn per structure."""
+        Maxwell distribution. T is drawn per structure as a fraction of the
+        melting point of the crystal the structure is built from; structures
+        not built from one (gas, dimers, trimers) use the film's, as deposition
+        temperatures are scaled by the film's melting point."""
         from ase.units import kB
 
         c = self.r0["thermal_rattle"]
-        sigma = math.sqrt(kB * self.u(c["temperature_K"]) / c["force_constant_eV_per_A2"])
+        tm = atoms.info.get("melting_point_K", self.film.info["melting_point_K"])
+        temperature = self.u(c["temperature_fraction_of_melting"]) * tm
+        sigma = math.sqrt(kB * temperature / c["force_constant_eV_per_A2"])
         atoms.positions += self.rng.normal(0.0, sigma, size=(len(atoms), 3))
         return atoms
 
@@ -230,6 +246,7 @@ class Builder:
         cell[2] = [0, 0, 1.0]  # placeholder height; add_slab_vacuum sets the real one
         s.set_cell(cell)
         s.set_cell(Cell.fromcellpar(s.cell.cellpar()), scale_atoms=True)  # a along x, b in xy
+        s.info["melting_point_K"] = bulk.info["melting_point_K"]
         return s
 
     def add_slab_vacuum(self, atoms):
@@ -296,6 +313,8 @@ class Builder:
         film.positions[:, 2] = z + top
         both = sub + film
         both.set_cell(sub.get_cell())
+        # the interface softens with the lower-melting side
+        both.info["melting_point_K"] = min(self.film.info["melting_point_K"], self.substrate.info["melting_point_K"])
         return self.add_slab_vacuum(both)
 
     # ---- point defects (vacancies and interstitials) --------------------
